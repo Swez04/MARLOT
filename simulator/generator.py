@@ -7,7 +7,7 @@ when the dominant fraud type changes over time (concept drift).
 """
 
 import random
-import uuid
+from uuid import uuid4
 from datetime import datetime, timedelta
 
 from simulator.transaction import Transaction
@@ -27,22 +27,31 @@ REGIMES = {
 }
 
 
+def _random_transaction() -> str:
+    return f"txn_{uuid4().hex}"
+
 def _random_account() -> str:
     return f"acct_{random.randint(1, 500):04d}"
 
 
 def _random_merchant() -> str:
-    return f"merch_{random.randint(1, 100):03d}"
+    return f"merch_{random.randint(1, 200):03d}"
+
+
+def _random_device() -> str:
+    return f"device_{random.randint(1, 1000):04d}"
 
 
 def _legit_transaction(ts: datetime) -> Transaction:
     return Transaction(
+        transaction_id=_random_transaction(),
         account_id=_random_account(),
         merchant_id=_random_merchant(),
         amount=round(random.lognormvariate(3.2, 0.6), 2),  # small everyday purchases
         timestamp=ts,
         location=random.choice(LOCATIONS),
         merchant_category=random.choice(CATEGORIES),
+        device_id=_random_device(),
         fraud_label=0,
         fraud_type="",
     )
@@ -82,7 +91,7 @@ def generate_stream(
     seconds_between: float = 1.0,
     seed: int | None = None,
 ) -> list[Transaction]:
-    """Generate `n` transactions under a given regime.
+    """Generate n transactions under a given regime.
 
     regime: key into REGIMES, controls which fraud types appear and at
             what rate. "normal" = no fraud injected.
@@ -90,7 +99,7 @@ def generate_stream(
     if seed is not None:
         random.seed(seed)
 
-    start_time = start_time or datetime.utcnow()
+    start_time = start_time or datetime.now()
     fraud_mix = REGIMES.get(regime, {})
     transactions = []
 
@@ -118,10 +127,10 @@ def generate_regime_sequence(
     n_per_regime: int = 1000,
     seed: int | None = None,
 ) -> list[Transaction]:
-    """Concatenate several regimes back to back — useful for testing
+    """Concatenate several regimes back to back - useful for testing
     whether a detector adapts as fraud patterns shift over time."""
     all_txns = []
-    t = datetime.utcnow()
+    t = datetime.now()
     for regime in regimes:
         batch = generate_stream(n_per_regime, regime=regime, start_time=t, seed=seed)
         all_txns.extend(batch)
