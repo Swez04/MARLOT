@@ -1,0 +1,10 @@
+[project]
+name = "marlot"
+version = "0.1.0"
+description = "Adaptive multi-agent RL for real-time fraud detection under concept drift"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=2.5.3",
+    "pandas>=3.0.5",
+    "scikit-learn>=1.9.0",
+]
