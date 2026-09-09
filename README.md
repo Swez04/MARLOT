@@ -1,4 +1,4 @@
-# fraud-marl
+# MARLOT
 
 Adaptive fraud detection, built up in phases. Currently at:
 
