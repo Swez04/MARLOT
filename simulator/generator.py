@@ -15,17 +15,6 @@ from simulator.transaction import Transaction
 LOCATIONS = ["US-CA", "US-NY", "US-TX", "GB-LON", "DE-BER", "IN-BLR", "SG-SIN"]
 CATEGORIES = ["grocery", "electronics", "travel", "restaurant", "subscription", "jewelry"]
 
-# Each regime defines which fraud types are "active" and roughly how much
-# of the traffic they should account for.
-REGIMES = {
-    "normal": {},
-    "amount_spike": {"amount_spike": 0.05},
-    "velocity": {"velocity": 0.05},
-    "geo_hop": {"geo_hop": 0.05},
-    "collusion": {"collusion": 0.03, "amount_spike": 0.02},
-    "mixed_unseen": {"velocity": 0.03, "geo_hop": 0.03, "collusion": 0.02},
-}
-
 
 def _random_transaction() -> str:
     return f"txn_{uuid4().hex}"
@@ -139,7 +128,7 @@ def generate_regime_sequence(
 
 
 if __name__ == "__main__":
-    # quick smoke test
+    # quick test
     txns = generate_stream(10, regime="amount_spike", seed=42)
     for t in txns:
         print(t)
