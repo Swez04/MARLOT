@@ -10,6 +10,7 @@ import random
 from uuid import uuid4
 from datetime import datetime, timedelta
 
+from simulator.regimes import REGIMES
 from simulator.transaction import Transaction
 
 LOCATIONS = ["US-CA", "US-NY", "US-TX", "GB-LON", "DE-BER", "IN-BLR", "SG-SIN"]
