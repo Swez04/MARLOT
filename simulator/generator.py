@@ -19,9 +19,9 @@ CATEGORIES = ["grocery", "electronics", "travel", "restaurant", "subscription", 
 
 
 class TransactionGenerator:
-    def __init__(self, seed: int | None = None):
+    def __init__(self, seed: int | None = None, state: SimulatorState | None = None):
         self.rng = random.Random(seed)
-        self.state = SimulatorState()
+        self.state = state if state is not None else SimulatorState()
 
     def _random_transaction_id(self) -> str:
         return f"txn_{self.rng.getrandbits(64):016x}"
