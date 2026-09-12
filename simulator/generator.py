@@ -10,7 +10,7 @@ import random
 from uuid import uuid4
 from datetime import datetime, timedelta
 
-from simulator.regimes import REGIMES
+from simulator.regimes import get_regime
 from simulator.transaction import Transaction
 from simulator.state import SimulatorState
 
@@ -75,12 +75,13 @@ class TransactionGenerator:
     def generate_stream(
         self,
         n: int,
-        regime: str = "normal",
+        regime_name: str = "normal",
         start_time: datetime | None = None,
         seconds_between: float = 1.0,
     ) -> list[Transaction]:
         start_time = start_time or datetime.now()
-        fraud_mix = REGIMES.get(regime, {})
+        regime = get_regime(regime_name)
+        fraud_mix = regime.fraud_mix
         transactions = []
 
         for i in range(n):
@@ -110,7 +111,7 @@ class TransactionGenerator:
         all_txns = []
         t = datetime.now()
         for regime in regimes:
-            batch = self.generate_stream(n_per_regime, regime=regime, start_time=t)
+            batch = self.generate_stream(n_per_regime, regime_name=regime, start_time=t)
             all_txns.extend(batch)
             t = batch[-1].timestamp + timedelta(seconds=1)
         return all_txns
