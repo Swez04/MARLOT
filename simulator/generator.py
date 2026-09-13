@@ -1,21 +1,30 @@
 """
 Synthetic transaction generator.
 
-Produces a stream of mostly-normal transactions with injected fraud
-patterns. Supports "regimes" so you can later test how detectors react
-when the dominant fraud type changes over time (concept drift).
+Produces a stream of mostly-normal transactions with injected fraud patterns.
 """
 
 import random
-from uuid import uuid4
-from datetime import datetime, timedelta
+from datetime import datetime
 
-from simulator.regimes import get_regime
+from simulator.scenarios import get_scenario
 from simulator.transaction import Transaction
 from simulator.state import SimulatorState
+from simulator.events import (
+    LegitimateEvent,
+    AmountSpikeEvent,
+    VelocityEvent,
+    GeoHopEvent,
+    CollusionEvent,
+)
 
-LOCATIONS = ["US-CA", "US-NY", "US-TX", "GB-LON", "DE-BER", "IN-BLR", "SG-SIN"]
-CATEGORIES = ["grocery", "electronics", "travel", "restaurant", "subscription", "jewelry"]
+EVENT_TYPES = {
+    "legitimate": LegitimateEvent,
+    "amount_spike": AmountSpikeEvent,
+    "velocity": VelocityEvent,
+    "geo_hop": GeoHopEvent,
+    "collusion": CollusionEvent,
+}
 
 
 class TransactionGenerator:
@@ -23,109 +32,127 @@ class TransactionGenerator:
         self.rng = random.Random(seed)
         self.state = state if state is not None else SimulatorState()
 
-    def _random_transaction_id(self) -> str:
-        return f"txn_{self.rng.getrandbits(64):016x}"
-
-    def _random_account(self) -> str:
-        return f"acct_{self.rng.randint(1, 500):04d}"
-
-    def _random_merchant(self) -> str:
-        return f"merch_{self.rng.randint(1, 200):03d}"
-
-    def _random_device(self) -> str:
-        return f"device_{self.rng.randint(1, 1000):04d}"
-
-    def _legit_transaction(self, ts: datetime) -> Transaction:
-        return Transaction(
-            transaction_id=self._random_transaction_id(),
-            account_id=self._random_account(),
-            merchant_id=self._random_merchant(),
-            amount=round(self.rng.lognormvariate(3.2, 0.6), 2),
-            timestamp=ts,
-            location=self.rng.choice(LOCATIONS),
-            merchant_category=self.rng.choice(CATEGORIES),
-            device_id=self._random_device(),
-            fraud_label=0,
-            fraud_type="",
-        )
-
-    def _fraud_transaction(self, ts: datetime, fraud_type: str) -> Transaction:
-        txn = self._legit_transaction(ts)
-        txn.fraud_label = 1
-        txn.fraud_type = fraud_type
-
-        if fraud_type == "amount_spike":
-            txn.amount = round(self.rng.uniform(2000, 9000), 2)
-
-        elif fraud_type == "velocity":
-            txn.amount = round(self.rng.uniform(20, 200), 2)
-
-        elif fraud_type == "geo_hop":
-            known_locations = self.state.get_account(txn.account_id).locations
-            choices = [loc for loc in LOCATIONS if loc not in known_locations] or LOCATIONS
-            txn.location = self.rng.choice(choices)
-            txn.amount = round(self.rng.uniform(50, 500), 2)
-
-        elif fraud_type == "collusion":
-            txn.merchant_id = "merch_666"
-            txn.amount = round(self.rng.uniform(100, 800), 2)
-
-        return txn
-
     def generate_stream(
         self,
         n: int,
-        regime_name: str = "normal",
+        scenario_name: str = "normal",
         start_time: datetime | None = None,
-        seconds_between: float = 1.0,
     ) -> list[Transaction]:
+
         start_time = start_time or datetime.now()
-        regime = get_regime(regime_name)
-        fraud_mix = regime.fraud_mix
+        scenario = get_scenario(scenario_name)
+
         transactions = []
+        current_time = start_time
 
-        for i in range(n):
-            ts = start_time + timedelta(seconds=i * seconds_between)
-            roll = self.rng.random()
-            cumulative = 0.0
-            chosen_fraud = None
-            for fraud_type, rate in fraud_mix.items():
-                cumulative += rate
-                if roll < cumulative:
-                    chosen_fraud = fraud_type
-                    break
+        while len(transactions) < n:
 
-            txn = self._fraud_transaction(ts, chosen_fraud) if chosen_fraud else self._legit_transaction(ts)
-            self.state.update(txn)
-            transactions.append(txn)
+            # Choose which type of event occurs next
+            event_name = self.rng.choices(
+                list(scenario.event_weights.keys()),
+                weights=list(scenario.event_weights.values()),
+                k=1,
+            )[0]
+
+            event_class = EVENT_TYPES[event_name]
+
+            # Decide how many transactions this event should produce
+            if event_name in {"legitimate", "amount_spike"}:
+                transaction_count = 1
+            elif event_name == "velocity":
+                transaction_count = self.rng.randint(5, 12)
+            elif event_name == "geo_hop":
+                transaction_count = self.rng.randint(3, 6)
+            elif event_name == "collusion":
+                transaction_count = self.rng.randint(5, 10)
+
+            event = event_class(
+                start_time=current_time,
+                transaction_count=transaction_count,
+                rng=self.rng,
+                state=self.state,
+            )
+
+            # Generate transactions belonging to this event
+            while not event.is_complete and len(transactions) < n:
+                txn = event.next_transaction()
+
+                self.state.update(txn)
+                event.transactions_generated += 1
+
+                transactions.append(txn)
+                current_time = txn.timestamp
 
         return transactions
-    
-    def generate_regime_sequence(
+
+    def generate_scenario_sequence(
         self,
-        regimes: list[str],
-        n_per_regime: int = 1000,
+        scenarios: list[str],
+        n_per_scenario: int = 1000,
     ) -> list[Transaction]:
-        """Concatenate several regimes back to back — useful for testing
+        """Concatenate several scenarios back to back — useful for testing
         whether a detector adapts as fraud patterns shift over time."""
         all_txns = []
         t = datetime.now()
-        for regime in regimes:
-            batch = self.generate_stream(n_per_regime, regime_name=regime, start_time=t)
+        for scenario in scenarios:
+            batch = self.generate_stream(n_per_scenario, scenario_name=scenario, start_time=t)
             all_txns.extend(batch)
-            t = batch[-1].timestamp + timedelta(seconds=1)
+            t = batch[-1].timestamp
         return all_txns
-    
+
 
 if __name__ == "__main__":
     gen = TransactionGenerator(seed=42)
-    txns = gen.generate_regime_sequence(
-        ["normal", "amount_spike", "velocity", "geo_hop"],
-        n_per_regime=50,
+
+    txns = gen.generate_scenario_sequence(
+        ["mixed", "normal", "velocity_attack"],
+        n_per_scenario=50,
     )
-    print(f"Generated {len(txns)} transactions across regimes")
+
+    print(f"Generated {len(txns)} transactions")
+
+    # 1. Basic count check
+    assert len(txns) == 150
+    print("Correct number of transactions")
+
+    # 2. Check timestamps are chronological
+    timestamps = [txn.timestamp for txn in txns]
+    assert timestamps == sorted(timestamps)
+    print("Timestamps are chronological")
+
+    # 3. Check transaction IDs are unique
+    transaction_ids = [txn.transaction_id for txn in txns]
+    assert len(transaction_ids) == len(set(transaction_ids))
+    print("Transaction IDs are unique")
+
+    # 4. Check every transaction has a valid fraud label/type
+    valid_fraud_types = {
+        "",
+        "amount_spike",
+        "velocity",
+        "geo_hop",
+        "collusion",
+    }
+
+    assert all(txn.fraud_type in valid_fraud_types for txn in txns)
+    assert all(txn.fraud_label in {0, 1} for txn in txns)
+    print("Fraud labels/types are valid")
+
+    # 5. Check fraud label matches fraud type
+    assert all(
+        (txn.fraud_label == 0 and txn.fraud_type == "")
+        or (txn.fraud_label == 1 and txn.fraud_type != "")
+        for txn in txns
+    )
+    print("Fraud labels match fraud types")
+
+    # 6. Print distribution
     fraud_by_type = {}
-    for t in txns:
-        if t.fraud_type:
-            fraud_by_type[t.fraud_type] = fraud_by_type.get(t.fraud_type, 0) + 1
-    print("Fraud counts by type:", fraud_by_type)
+
+    for txn in txns:
+        fraud_type = txn.fraud_type or "legitimate"
+        fraud_by_type[fraud_type] = fraud_by_type.get(fraud_type, 0) + 1
+
+    print("\nTransaction distribution:")
+    for fraud_type, count in fraud_by_type.items():
+        print(f"  {fraud_type}: {count}")
