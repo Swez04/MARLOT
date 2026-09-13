@@ -56,19 +56,8 @@ class TransactionGenerator:
 
             event_class = EVENT_TYPES[event_name]
 
-            # Decide how many transactions this event should produce
-            if event_name in {"legitimate", "amount_spike"}:
-                transaction_count = 1
-            elif event_name == "velocity":
-                transaction_count = self.rng.randint(5, 12)
-            elif event_name == "geo_hop":
-                transaction_count = self.rng.randint(3, 6)
-            elif event_name == "collusion":
-                transaction_count = self.rng.randint(5, 10)
-
             event = event_class(
                 start_time=current_time,
-                transaction_count=transaction_count,
                 rng=self.rng,
                 state=self.state,
             )
@@ -95,7 +84,9 @@ class TransactionGenerator:
         all_txns = []
         t = datetime.now()
         for scenario in scenarios:
-            batch = self.generate_stream(n_per_scenario, scenario_name=scenario, start_time=t)
+            batch = self.generate_stream(
+                n_per_scenario, scenario_name=scenario, start_time=t
+            )
             all_txns.extend(batch)
             t = batch[-1].timestamp
         return all_txns

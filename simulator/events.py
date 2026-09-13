@@ -23,12 +23,12 @@ GEO_HOPS = {
 class Event(ABC):
     """ Base class for a single simulator event. """
     
-    def __init__(self, start_time: datetime, transaction_count: int, rng: random.Random, state: SimulatorState):
+    def __init__(self, start_time: datetime, rng: random.Random, state: SimulatorState):
         self.rng = rng
         self.state = state
         self.start_time = start_time
         self.current_time = start_time
-        self.transaction_count = transaction_count
+        self.transaction_count = 0
         
         self.transactions_generated = 0
         
@@ -57,6 +57,9 @@ class Event(ABC):
         
     
 class LegitimateEvent(Event):
+    def __init__(self, start_time, rng, state):
+        super().__init__(start_time, rng, state)
+        self.transaction_count = 1
     
     def next_transaction(self) -> Transaction:
         return Transaction(
@@ -74,6 +77,9 @@ class LegitimateEvent(Event):
 
 
 class AmountSpikeEvent(Event):
+    def __init__(self, start_time, rng, state):
+        super().__init__(start_time, rng, state)
+        self.transaction_count = 1
     
     def next_transaction(self) -> Transaction:
         if self.state.accounts:
@@ -109,8 +115,10 @@ class AmountSpikeEvent(Event):
 
 
 class VelocityEvent(Event):
-    def __init__(self, start_time, transaction_count, rng, state):
-        super().__init__(start_time, transaction_count, rng, state)
+    def __init__(self, start_time, rng, state):
+        super().__init__(start_time, rng, state)
+        
+        self.transaction_count = self.rng.randint(5, 12)
                 
         if self.state.accounts:
             self.account = self.rng.choice(list(self.state.accounts.keys()))
@@ -136,9 +144,11 @@ class VelocityEvent(Event):
 
         
 class GeoHopEvent(Event):
-    def __init__(self, start_time, transaction_count, rng, state):
-        super().__init__(start_time, transaction_count, rng, state)
-                
+    def __init__(self, start_time, rng, state):
+        super().__init__(start_time, rng, state)
+        
+        self.transaction_count = self.rng.randint(3, 6)
+        
         if self.state.accounts:
             self.account = self.rng.choice(list(self.state.accounts.keys()))
         else:
@@ -172,8 +182,10 @@ class GeoHopEvent(Event):
         
 
 class CollusionEvent(Event):
-    def __init__(self, start_time, transaction_count, rng, state):
-        super().__init__(start_time, transaction_count, rng, state)
+    def __init__(self, start_time, rng, state):
+        super().__init__(start_time, rng, state)
+        
+        self.transaction_count = self.rng.randint(5, 10)
         
         if self.state.merchants:
             self.merchant = self.rng.choice(list(self.state.merchants.keys()))
