@@ -5,7 +5,7 @@ Adaptive fraud detection, built up in phases. Currently at:
 **Phase 1** — synthetic transaction simulator (`simulator/`)
 **Phase 2** — non-RL baseline detectors (`detectors/`) + evaluation (`evaluation/`)
 
-Not yet built (add folders as you get here):
+Not yet built:
 - **Phase 3** — RL / MARL decision layer (`agents/`, `rl/`)
 - **Phase 4** — concept-drift regime experiments, scaled up
 
