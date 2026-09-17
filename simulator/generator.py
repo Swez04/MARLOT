@@ -67,7 +67,7 @@ class TransactionGenerator:
                 txn = event.next_transaction()
 
                 self.state.update(txn)
-                event.transactions_generated += 1
+                
 
                 transactions.append(txn)
                 current_time = txn.timestamp

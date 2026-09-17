@@ -36,10 +36,16 @@ class Event(ABC):
     def is_complete(self) -> bool:
         return self.transactions_generated >= self.transaction_count
     
-    @abstractmethod
     def next_transaction(self) -> Transaction:
-        """ Generate the next transaction belonging to this event.
-            Subclasses must implement the event-specific behavior. """
+        """ Generate the next transaction belonging to this event,
+            and update this event's own completion bookkeeping. """
+        txn = self._generate_transaction()
+        self.transactions_generated += 1
+        return txn
+
+    @abstractmethod
+    def _generate_transaction(self) -> Transaction:
+        """ Subclasses implement the event-specific transaction logic here. """
         pass
     
     def _random_transaction_id(self) -> str:
@@ -61,7 +67,7 @@ class LegitimateEvent(Event):
         super().__init__(start_time, rng, state)
         self.transaction_count = 1
     
-    def next_transaction(self) -> Transaction:
+    def _generate_transaction(self) -> Transaction:
         return Transaction(
             transaction_id=self._random_transaction_id(),
             account_id=self._random_account(),
@@ -81,7 +87,7 @@ class AmountSpikeEvent(Event):
         super().__init__(start_time, rng, state)
         self.transaction_count = 1
     
-    def next_transaction(self) -> Transaction:
+    def _generate_transaction(self) -> Transaction:
         if self.state.accounts:
             account = self.rng.choice(list(self.state.accounts.keys()))
             txns = self.state.recent_transactions(account)
@@ -126,7 +132,7 @@ class VelocityEvent(Event):
             self.account = self._random_account()
         
     
-    def next_transaction(self) -> Transaction:
+    def _generate_transaction(self) -> Transaction:
         self.current_time += timedelta(seconds=self.rng.randint(1, 30))
         
         return Transaction(
@@ -156,7 +162,7 @@ class GeoHopEvent(Event):
         
         self.previous_location = None        
         
-    def next_transaction(self) -> Transaction:
+    def _generate_transaction(self) -> Transaction:
         if self.previous_location is None:
             location = self.rng.choice(LOCATIONS)
 
@@ -200,7 +206,7 @@ class CollusionEvent(Event):
             self.accounts = [self._random_account() for _ in range(self.rng.randint(2, 5))]
 
     
-    def next_transaction(self) -> Transaction:
+    def _generate_transaction(self) -> Transaction:
         account = self.rng.choice(self.accounts)
         
         self.current_time += timedelta(seconds=self.rng.randint(10, 60))
