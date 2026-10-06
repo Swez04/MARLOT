@@ -6,9 +6,15 @@ import random
 from simulator.transaction import Transaction
 from simulator.state import SimulatorState
 
-
 LOCATIONS = ["US-CA", "US-NY", "US-TX", "GB-LON", "DE-BER", "IN-BLR", "SG-SIN"]
-CATEGORIES = ["grocery", "electronics", "travel", "restaurant", "subscription", "jewelry"]
+CATEGORIES = [
+    "grocery",
+    "electronics",
+    "travel",
+    "restaurant",
+    "subscription",
+    "jewelry",
+]
 
 GEO_HOPS = {
     "US-CA": ["GB-LON", "DE-BER", "IN-BLR", "SG-SIN"],
@@ -20,37 +26,41 @@ GEO_HOPS = {
     "SG-SIN": ["US-CA", "US-NY", "GB-LON", "DE-BER"],
 }
 
+
 class Event(ABC):
-    """ Base class for a single simulator event. """
-    
+    """Base class for a single simulator event."""
+
     def __init__(self, start_time: datetime, rng: random.Random, state: SimulatorState):
         self.rng = rng
         self.state = state
         self.start_time = start_time
         self.current_time = start_time
         self.transaction_count = 0
-        
+
         self.transactions_generated = 0
-        
+
     @property
     def is_complete(self) -> bool:
         return self.transactions_generated >= self.transaction_count
-    
+
     def next_transaction(self) -> Transaction:
-        """ Generate the next transaction belonging to this event,
-            and update this event's own completion bookkeeping. """
+        """Generate the next transaction belonging to this event,
+        and update this event's own completion bookkeeping."""
+        if self.is_complete:
+            raise RuntimeError("Cannot generate a transaction from a completed event.")
+        
         txn = self._generate_transaction()
         self.transactions_generated += 1
         return txn
 
     @abstractmethod
     def _generate_transaction(self) -> Transaction:
-        """ Subclasses implement the event-specific transaction logic here. """
+        """Subclasses implement the event-specific transaction logic here."""
         pass
-    
+
     def _random_transaction_id(self) -> str:
         return f"txn_{self.rng.getrandbits(64):016x}"
-        
+
     def _random_account(self) -> str:
         return f"acct_{self.rng.randint(1, 500):04d}"
 
@@ -60,13 +70,12 @@ class Event(ABC):
     def _random_device(self) -> str:
         return f"device_{self.rng.randint(1, 1000):04d}"
 
-        
-    
+
 class LegitimateEvent(Event):
     def __init__(self, start_time, rng, state):
         super().__init__(start_time, rng, state)
         self.transaction_count = 1
-    
+
     def _generate_transaction(self) -> Transaction:
         return Transaction(
             transaction_id=self._random_transaction_id(),
@@ -86,7 +95,7 @@ class AmountSpikeEvent(Event):
     def __init__(self, start_time, rng, state):
         super().__init__(start_time, rng, state)
         self.transaction_count = 1
-    
+
     def _generate_transaction(self) -> Transaction:
         if self.state.accounts:
             account = self.rng.choice(list(self.state.accounts.keys()))
@@ -94,8 +103,7 @@ class AmountSpikeEvent(Event):
         else:
             account = self._random_account()
             txns = []
-            
-        
+
         txn = Transaction(
             transaction_id=self._random_transaction_id(),
             account_id=account,
@@ -108,14 +116,18 @@ class AmountSpikeEvent(Event):
             fraud_label=1,
             fraud_type="amount_spike",
         )
-        
-        if len(txns) >= 25:                                  # ensure sufficient account history for historical baseline
+
+        if len(txns) >= 25:  # ensure sufficient account history for historical baseline
             amounts = [txn.amount for txn in txns]
-            baseline_amount = np.percentile(amounts, 75)        # set the baseline amount to 75th percentile
-            txn.amount = round(baseline_amount * self.rng.uniform(10, 50), 2)       # 10-50x amount spike
+            baseline_amount = np.percentile(
+                amounts, 75
+            )  # set the baseline amount to 75th percentile
+            txn.amount = round(
+                baseline_amount * self.rng.uniform(10, 50), 2
+            )  # 10-50x amount spike
         else:
             txn.amount = round(txn.amount * self.rng.uniform(10, 50), 2)
-        
+
         self.current_time += timedelta(minutes=2)
         return txn
 
@@ -123,18 +135,17 @@ class AmountSpikeEvent(Event):
 class VelocityEvent(Event):
     def __init__(self, start_time, rng, state):
         super().__init__(start_time, rng, state)
-        
+
         self.transaction_count = self.rng.randint(5, 12)
-                
+
         if self.state.accounts:
             self.account = self.rng.choice(list(self.state.accounts.keys()))
         else:
             self.account = self._random_account()
-        
-    
+
     def _generate_transaction(self) -> Transaction:
         self.current_time += timedelta(seconds=self.rng.randint(1, 30))
-        
+
         return Transaction(
             transaction_id=self._random_transaction_id(),
             account_id=self.account,
@@ -148,31 +159,31 @@ class VelocityEvent(Event):
             fraud_type="velocity",
         )
 
-        
+
 class GeoHopEvent(Event):
     def __init__(self, start_time, rng, state):
         super().__init__(start_time, rng, state)
-        
+
         self.transaction_count = self.rng.randint(3, 6)
-        
+
         if self.state.accounts:
             self.account = self.rng.choice(list(self.state.accounts.keys()))
         else:
             self.account = self._random_account()
-        
-        self.previous_location = None        
-        
+
+        self.previous_location = None
+
     def _generate_transaction(self) -> Transaction:
         if self.previous_location is None:
             location = self.rng.choice(LOCATIONS)
 
         else:
             location = self.rng.choice(GEO_HOPS[self.previous_location])
-            
+
         self.previous_location = location
-        
+
         self.current_time += timedelta(seconds=self.rng.randint(30, 120))
-        
+
         return Transaction(
             transaction_id=self._random_transaction_id(),
             account_id=self.account,
@@ -185,14 +196,14 @@ class GeoHopEvent(Event):
             fraud_label=1,
             fraud_type="geo_hop",
         )
-        
+
 
 class CollusionEvent(Event):
     def __init__(self, start_time, rng, state):
         super().__init__(start_time, rng, state)
-        
+
         self.transaction_count = self.rng.randint(5, 10)
-        
+
         if self.state.merchants:
             self.merchant = self.rng.choice(list(self.state.merchants.keys()))
         else:
@@ -203,14 +214,15 @@ class CollusionEvent(Event):
             num_accounts = min(self.rng.randint(2, 5), len(accounts))
             self.accounts = self.rng.sample(accounts, num_accounts)
         else:
-            self.accounts = [self._random_account() for _ in range(self.rng.randint(2, 5))]
+            self.accounts = [
+                self._random_account() for _ in range(self.rng.randint(2, 5))
+            ]
 
-    
     def _generate_transaction(self) -> Transaction:
         account = self.rng.choice(self.accounts)
-        
+
         self.current_time += timedelta(seconds=self.rng.randint(10, 60))
-        
+
         return Transaction(
             transaction_id=self._random_transaction_id(),
             account_id=account,
@@ -223,4 +235,12 @@ class CollusionEvent(Event):
             fraud_label=1,
             fraud_type="collusion",
         )
-        
+
+
+EVENT_TYPES = {
+    "legitimate": LegitimateEvent,
+    "amount_spike": AmountSpikeEvent,
+    "velocity": VelocityEvent,
+    "geo_hop": GeoHopEvent,
+    "collusion": CollusionEvent,
+}

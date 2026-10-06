@@ -10,21 +10,7 @@ from datetime import datetime
 from simulator.scenarios import get_scenario
 from simulator.transaction import Transaction
 from simulator.state import SimulatorState
-from simulator.events import (
-    LegitimateEvent,
-    AmountSpikeEvent,
-    VelocityEvent,
-    GeoHopEvent,
-    CollusionEvent,
-)
-
-EVENT_TYPES = {
-    "legitimate": LegitimateEvent,
-    "amount_spike": AmountSpikeEvent,
-    "velocity": VelocityEvent,
-    "geo_hop": GeoHopEvent,
-    "collusion": CollusionEvent,
-}
+from simulator.events import EVENT_TYPES
 
 
 class TransactionGenerator:
@@ -67,7 +53,6 @@ class TransactionGenerator:
                 txn = event.next_transaction()
 
                 self.state.update(txn)
-                
 
                 transactions.append(txn)
                 current_time = txn.timestamp
