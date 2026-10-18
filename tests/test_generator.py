@@ -1,9 +1,8 @@
 from datetime import datetime
+from itertools import islice
 import pytest
 
 from simulator.generator import TransactionGenerator
-from datetime import datetime
-
 
 
 def transaction_signature(txn):
@@ -31,6 +30,52 @@ def test_generate_stream_returns_exactly_n_transactions(n):
     )
 
     assert len(transactions) == n
+
+
+def test_generate_stream_zero_transactions():
+    generator = TransactionGenerator(seed=42)
+
+    transactions = generator.generate_stream(n=0)
+
+    assert transactions == []
+    assert len(generator.state.accounts) == 0
+
+
+def test_generate_stream_rejects_negative_n():
+    generator = TransactionGenerator(seed=42)
+
+    with pytest.raises(ValueError, match="non-negative"):
+        generator.generate_stream(n=-1)
+
+
+def test_batch_and_stream_produce_equivalent_transactions():
+    seed = 42
+    n = 50
+    start_time = datetime(2025, 1, 1, 12, 0, 0)
+
+    batch_generator = TransactionGenerator(seed=seed)
+    stream_generator = TransactionGenerator(seed=seed)
+
+    # Generate using the batch API.
+    batch = batch_generator.generate_stream(
+        n=n,
+        scenario_name="mixed",
+        start_time=start_time,
+    )
+
+    # Generate the same number using the lazy API.
+    stream = stream_generator.stream(
+        scenario_name="mixed",
+        start_time=start_time,
+    )
+    streamed = list(islice(stream, n))
+
+    assert len(batch) == n
+    assert len(streamed) == n
+
+    assert [transaction_signature(txn) for txn in batch] == [
+        transaction_signature(txn) for txn in streamed
+    ]
 
 
 def test_generate_one_transaction_does_not_overshoot():
@@ -349,9 +394,12 @@ def test_stream_produces_one_transaction_at_a_time():
 
     txn = next(it)
 
-    total_in_state = sum(len(account.transactions) for account in gen.state.accounts.values())
+    total_in_state = sum(
+        len(account.transactions) for account in gen.state.accounts.values()
+    )
     assert total_in_state == 1
     assert gen.state.recent_transactions(txn.account_id)[-1] is txn
+
 
 def test_stream_continues_chronologically_and_accumulates_state():
     gen = TransactionGenerator(seed=42)
@@ -362,8 +410,11 @@ def test_stream_continues_chronologically_and_accumulates_state():
     timestamps = [txn.timestamp for txn in txns]
     assert timestamps == sorted(timestamps)
 
-    total_in_state = sum(len(account.transactions) for account in gen.state.accounts.values())
+    total_in_state = sum(
+        len(account.transactions) for account in gen.state.accounts.values()
+    )
     assert total_in_state == 30
+
 
 def test_stream_crosses_event_boundaries():
     gen = TransactionGenerator(seed=42)
@@ -380,5 +431,7 @@ def test_stream_crosses_event_boundaries():
     timestamps = [txn.timestamp for txn in txns]
     assert timestamps == sorted(timestamps)
 
-    total_in_state = sum(len(account.transactions) for account in gen.state.accounts.values())
+    total_in_state = sum(
+        len(account.transactions) for account in gen.state.accounts.values()
+    )
     assert total_in_state == 300

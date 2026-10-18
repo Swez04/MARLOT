@@ -1,62 +1,61 @@
-
 import random
 from datetime import datetime
 from itertools import islice
 from typing import Iterator
- 
+
 from simulator.scenarios import get_scenario
 from simulator.transaction import Transaction
 from simulator.state import SimulatorState
 from simulator.events import EVENT_TYPES
- 
- 
+
+
 class TransactionGenerator:
     def __init__(self, seed: int | None = None, state: SimulatorState | None = None):
         self.rng = random.Random(seed)
         self.state = state if state is not None else SimulatorState()
- 
+
     def stream(
         self,
         scenario_name: str = "normal",
         start_time: datetime | None = None,
     ) -> Iterator[Transaction]:
         """Lazily yield transactions under a scenario, forever.
- 
+
         The stream never ends on its own: when an event finishes, a new one is
         chosen from the scenario weights. It stops only when the consumer stops
         asking for transactions.
         """
- 
+
         start_time = start_time or datetime.now()
         scenario = get_scenario(scenario_name)
         current_time = start_time
- 
+
         while True:
- 
+
             # Choose which type of event occurs next
             event_name = self.rng.choices(
                 list(scenario.event_weights.keys()),
                 weights=list(scenario.event_weights.values()),
                 k=1,
             )[0]
- 
+
             event_class = EVENT_TYPES[event_name]
- 
+
             event = event_class(
                 start_time=current_time,
                 rng=self.rng,
                 state=self.state,
             )
- 
+
             # Generate transactions belonging to this event, one per next()
             while not event.is_complete:
                 txn = event.next_transaction()
- 
+
                 self.state.update(txn)  # state first, so the consumer sees it
                 current_time = txn.timestamp
- 
+
                 yield txn  # pause here until the consumer asks for the next one
- 
+
     def generate_stream(
         self,
         n: int,
@@ -64,8 +63,12 @@ class TransactionGenerator:
         start_time: datetime | None = None,
     ) -> list[Transaction]:
         """Collect exactly n transactions from the lazy stream()."""
+
+        if n < 0:
+            raise ValueError("n must be non-negative")
+
         return list(islice(self.stream(scenario_name, start_time), n))
- 
+
     def generate_scenario_sequence(
         self,
         scenarios: list[str],
@@ -82,32 +85,32 @@ class TransactionGenerator:
             all_txns.extend(batch)
             t = batch[-1].timestamp
         return all_txns
- 
- 
+
+
 if __name__ == "__main__":
     gen = TransactionGenerator(seed=42)
- 
+
     txns = gen.generate_scenario_sequence(
         ["mixed", "normal", "velocity_attack"],
         n_per_scenario=50,
     )
- 
+
     print(f"Generated {len(txns)} transactions")
- 
+
     # 1. Basic count check
     assert len(txns) == 150
     print("Correct number of transactions")
- 
+
     # 2. Check timestamps are chronological
     timestamps = [txn.timestamp for txn in txns]
     assert timestamps == sorted(timestamps)
     print("Timestamps are chronological")
- 
+
     # 3. Check transaction IDs are unique
     transaction_ids = [txn.transaction_id for txn in txns]
     assert len(transaction_ids) == len(set(transaction_ids))
     print("Transaction IDs are unique")
- 
+
     # 4. Check every transaction has a valid fraud label/type
     valid_fraud_types = {
         "",
@@ -116,11 +119,11 @@ if __name__ == "__main__":
         "geo_hop",
         "collusion",
     }
- 
+
     assert all(txn.fraud_type in valid_fraud_types for txn in txns)
     assert all(txn.fraud_label in {0, 1} for txn in txns)
     print("Fraud labels/types are valid")
- 
+
     # 5. Check fraud label matches fraud type
     assert all(
         (txn.fraud_label == 0 and txn.fraud_type == "")
@@ -128,15 +131,14 @@ if __name__ == "__main__":
         for txn in txns
     )
     print("Fraud labels match fraud types")
- 
+
     # 6. Print distribution
     fraud_by_type = {}
- 
+
     for txn in txns:
         fraud_type = txn.fraud_type or "legitimate"
         fraud_by_type[fraud_type] = fraud_by_type.get(fraud_type, 0) + 1
- 
+
     print("\nTransaction distribution:")
     for fraud_type, count in fraud_by_type.items():
         print(f"  {fraud_type}: {count}")
- 
