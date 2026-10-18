@@ -2,6 +2,8 @@ from datetime import datetime
 import pytest
 
 from simulator.generator import TransactionGenerator
+from datetime import datetime
+
 
 
 def transaction_signature(txn):
@@ -339,3 +341,44 @@ def test_geo_attack_produces_repeated_account_with_multiple_locations():
         ).add(txn.location)
 
     assert any(len(locations) >= 2 for locations in account_locations.values())
+
+
+def test_stream_produces_one_transaction_at_a_time():
+    gen = TransactionGenerator(seed=42)
+    it = gen.stream("velocity_attack", start_time=datetime(2026, 1, 1))
+
+    txn = next(it)
+
+    total_in_state = sum(len(account.transactions) for account in gen.state.accounts.values())
+    assert total_in_state == 1
+    assert gen.state.recent_transactions(txn.account_id)[-1] is txn
+
+def test_stream_continues_chronologically_and_accumulates_state():
+    gen = TransactionGenerator(seed=42)
+    it = gen.stream("velocity_attack", start_time=datetime(2026, 1, 1))
+
+    txns = [next(it) for _ in range(30)]
+
+    timestamps = [txn.timestamp for txn in txns]
+    assert timestamps == sorted(timestamps)
+
+    total_in_state = sum(len(account.transactions) for account in gen.state.accounts.values())
+    assert total_in_state == 30
+
+def test_stream_crosses_event_boundaries():
+    gen = TransactionGenerator(seed=42)
+    it = gen.stream("velocity_attack", start_time=datetime(2026, 1, 1))
+
+    txns = [next(it) for _ in range(300)]
+
+    labels = [txn.fraud_label for txn in txns]
+    label_changes = sum(1 for a, b in zip(labels, labels[1:]) if a != b)
+
+    # fraud -> legit -> fraud means events ended and new ones started
+    assert label_changes >= 4
+
+    timestamps = [txn.timestamp for txn in txns]
+    assert timestamps == sorted(timestamps)
+
+    total_in_state = sum(len(account.transactions) for account in gen.state.accounts.values())
+    assert total_in_state == 300
