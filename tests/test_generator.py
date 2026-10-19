@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from itertools import islice
 
 import pytest
@@ -6,6 +6,106 @@ import pytest
 from simulator.generator import TransactionGenerator
 
 FIXED_START_TIME = datetime(2026, 1, 1, 12, 0, 0)
+
+
+def test_normal_transactions_have_meaningful_time_gaps():
+    generator = TransactionGenerator(seed=42)
+
+    transactions = generator.generate_stream(
+        n=100,
+        scenario_name="normal",
+        start_time=FIXED_START_TIME,
+    )
+
+    assert len(transactions) == 100
+    assert transactions[0].timestamp == FIXED_START_TIME
+
+    gaps = [
+        later.timestamp - earlier.timestamp
+        for earlier, later in zip(
+            transactions,
+            transactions[1:],
+        )
+    ]
+
+    # The inter-event gap must be at least one simulated second.
+    assert all(gap >= timedelta(seconds=1) for gap in gaps)
+
+    # The old implementation generated 999 intervals totalling
+    # approximately one millisecond for a 1,000-transaction batch.
+    # This batch should span meaningful simulated time instead.
+    assert transactions[-1].timestamp - transactions[0].timestamp >= (
+        timedelta(seconds=99)
+    )
+
+
+def test_clock_continues_across_batch_calls():
+    generator = TransactionGenerator(seed=42)
+
+    first = generator.generate_stream(
+        n=10,
+        scenario_name="normal",
+        start_time=FIXED_START_TIME,
+    )
+
+    second = generator.generate_stream(
+        n=10,
+        scenario_name="normal",
+    )
+
+    assert len(first) == 10
+    assert len(second) == 10
+    assert second[0].timestamp > first[-1].timestamp
+
+    gap = second[0].timestamp - first[-1].timestamp
+    assert gap >= timedelta(seconds=1)
+
+
+def test_scenario_sequence_has_increasing_timestamps():
+    generator = TransactionGenerator(seed=42)
+
+    transactions = generator.generate_scenario_sequence(
+        [
+            ("normal", 10),
+            ("normal", 10),
+        ],
+        start_time=FIXED_START_TIME,
+    )
+
+    assert len(transactions) == 20
+
+    timestamps = [txn.timestamp for txn in transactions]
+
+    assert all(
+        earlier < later
+        for earlier, later in zip(timestamps, timestamps[1:])
+    )
+
+    segment_gap = (
+        transactions[10].timestamp - transactions[9].timestamp
+    )
+    assert segment_gap >= timedelta(seconds=1)
+
+
+def test_timing_is_reproducible_with_same_seed_and_start_time():
+    first_generator = TransactionGenerator(seed=42)
+    second_generator = TransactionGenerator(seed=42)
+
+    first = first_generator.generate_stream(
+        n=50,
+        scenario_name="normal",
+        start_time=FIXED_START_TIME,
+    )
+
+    second = second_generator.generate_stream(
+        n=50,
+        scenario_name="normal",
+        start_time=FIXED_START_TIME,
+    )
+
+    assert [txn.timestamp for txn in first] == [
+        txn.timestamp for txn in second
+    ]
 
 
 def transaction_signature(txn):

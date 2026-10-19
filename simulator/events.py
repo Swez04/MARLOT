@@ -5,6 +5,7 @@ import random
 
 from simulator.transaction import Transaction
 from simulator.state import SimulatorState
+from simulator.clock import SimulationClock
 
 LOCATIONS = ["US-CA", "US-NY", "US-TX", "GB-LON", "DE-BER", "IN-BLR", "SG-SIN"]
 CATEGORIES = [
@@ -27,14 +28,59 @@ GEO_HOPS = {
 }
 
 
+class ClockedEventMixin:
+    """Shared timing behavior for transaction events."""
+
+    def _init_timing(
+        self,
+        clock: SimulationClock,
+        rng,
+        state,
+    ) -> None:
+        self.clock = clock
+        self.rng = rng
+        self.state = state
+        self._timestamps_issued = 0
+
+    def _next_timestamp(
+        self,
+        gap_seconds: tuple[float, float] | None = None,
+    ):
+        """Get this event's next timestamp from the shared clock.
+
+        The first transaction uses the clock's current time.
+        Later transactions advance time using the event's own gap range.
+        """
+        if self._timestamps_issued > 0:
+            if gap_seconds is None:
+                raise RuntimeError("This event has no configured inter-transaction gap")
+
+            minimum, maximum = gap_seconds
+
+            if minimum <= 0 or maximum < minimum:
+                raise ValueError("Invalid inter-transaction gap range")
+
+            gap = self.rng.uniform(minimum, maximum)
+
+            self.clock.advance_by(timedelta(seconds=gap))
+
+        self._timestamps_issued += 1
+        return self.clock.current_time
+
+
 class Event(ABC):
     """Base class for a single simulator event."""
 
-    def __init__(self, start_time: datetime, rng: random.Random, state: SimulatorState):
+    def __init__(self, clock: datetime, rng: random.Random, state: SimulatorState):
+        self.clock = clock
         self.rng = rng
         self.state = state
-        self.start_time = start_time
-        self.current_time = start_time
+
+        self.start_time = clock.current_time
+        self.current_time = clock.current_time
+
+        self._timestamps_issued = 0
+
         self.transaction_count = 0
 
         self.transactions_generated = 0
@@ -43,12 +89,35 @@ class Event(ABC):
     def is_complete(self) -> bool:
         return self.transactions_generated >= self.transaction_count
 
+    def _next_timestamp(
+        self,
+        gap_seconds: tuple[float, float] | None = None,
+    ):
+        """Return a timestamp from the shared simulation clock."""
+
+        if self._timestamps_issued > 0:
+            if gap_seconds is None:
+                raise RuntimeError("A multi-transaction event requires an internal gap")
+
+            minimum, maximum = gap_seconds
+
+            if minimum <= 0 or maximum < minimum:
+                raise ValueError("Invalid inter-transaction gap range")
+
+            gap = self.rng.uniform(minimum, maximum)
+            self.clock.advance_by(timedelta(seconds=gap))
+
+        self._timestamps_issued += 1
+        self.current_time = self.clock.current_time
+
+        return self.clock.current_time
+
     def next_transaction(self) -> Transaction:
         """Generate the next transaction belonging to this event,
         and update this event's own completion bookkeeping."""
         if self.is_complete:
             raise RuntimeError("Cannot generate a transaction from a completed event.")
-        
+
         txn = self._generate_transaction()
         self.transactions_generated += 1
         return txn
@@ -72,8 +141,8 @@ class Event(ABC):
 
 
 class LegitimateEvent(Event):
-    def __init__(self, start_time, rng, state):
-        super().__init__(start_time, rng, state)
+    def __init__(self, clock, rng, state):
+        super().__init__(clock, rng, state)
         self.transaction_count = 1
 
     def _generate_transaction(self) -> Transaction:
@@ -82,7 +151,7 @@ class LegitimateEvent(Event):
             account_id=self._random_account(),
             merchant_id=self._random_merchant(),
             amount=round(self.rng.lognormvariate(3.2, 0.6), 2),
-            timestamp=self.start_time,
+            timestamp=self._next_timestamp(),
             location=self.rng.choice(LOCATIONS),
             merchant_category=self.rng.choice(CATEGORIES),
             device_id=self._random_device(),
@@ -92,8 +161,8 @@ class LegitimateEvent(Event):
 
 
 class AmountSpikeEvent(Event):
-    def __init__(self, start_time, rng, state):
-        super().__init__(start_time, rng, state)
+    def __init__(self, clock, rng, state):
+        super().__init__(clock, rng, state)
         self.transaction_count = 1
 
     def _generate_transaction(self) -> Transaction:
@@ -104,12 +173,21 @@ class AmountSpikeEvent(Event):
             account = self._random_account()
             txns = []
 
-        txn = Transaction(
+        amount = round(self.rng.lognormvariate(3.2, 0.6), 2)
+
+        if len(txns) >= 25:
+            amounts = [previous.amount for previous in txns]
+            baseline_amount = np.percentile(amounts, 75)
+            amount = round(baseline_amount * self.rng.uniform(10, 50), 2)
+        else:
+            amount = round(amount * self.rng.uniform(10, 50), 2)
+
+        return Transaction(
             transaction_id=self._random_transaction_id(),
             account_id=account,
             merchant_id=self._random_merchant(),
-            amount=round(self.rng.lognormvariate(3.2, 0.6), 2),
-            timestamp=self.current_time,
+            amount=amount,
+            timestamp=self._next_timestamp(),
             location=self.rng.choice(LOCATIONS),
             merchant_category=self.rng.choice(CATEGORIES),
             device_id=self._random_device(),
@@ -117,24 +195,12 @@ class AmountSpikeEvent(Event):
             fraud_type="amount_spike",
         )
 
-        if len(txns) >= 25:  # ensure sufficient account history for historical baseline
-            amounts = [txn.amount for txn in txns]
-            baseline_amount = np.percentile(
-                amounts, 75
-            )  # set the baseline amount to 75th percentile
-            txn.amount = round(
-                baseline_amount * self.rng.uniform(10, 50), 2
-            )  # 10-50x amount spike
-        else:
-            txn.amount = round(txn.amount * self.rng.uniform(10, 50), 2)
-
-        self.current_time += timedelta(minutes=2)
-        return txn
-
 
 class VelocityEvent(Event):
-    def __init__(self, start_time, rng, state):
-        super().__init__(start_time, rng, state)
+    INTER_TRANSACTION_GAP_SECONDS = (1.0, 30.0)
+
+    def __init__(self, clock, rng, state):
+        super().__init__(clock, rng, state)
 
         self.transaction_count = self.rng.randint(5, 12)
 
@@ -144,14 +210,12 @@ class VelocityEvent(Event):
             self.account = self._random_account()
 
     def _generate_transaction(self) -> Transaction:
-        self.current_time += timedelta(seconds=self.rng.randint(1, 30))
-
         return Transaction(
             transaction_id=self._random_transaction_id(),
             account_id=self.account,
             merchant_id=self._random_merchant(),
             amount=round(self.rng.lognormvariate(3.2, 0.6), 2),
-            timestamp=self.current_time,
+            timestamp=self._next_timestamp(self.INTER_TRANSACTION_GAP_SECONDS),
             location=self.rng.choice(LOCATIONS),
             merchant_category=self.rng.choice(CATEGORIES),
             device_id=self._random_device(),
@@ -161,8 +225,10 @@ class VelocityEvent(Event):
 
 
 class GeoHopEvent(Event):
-    def __init__(self, start_time, rng, state):
-        super().__init__(start_time, rng, state)
+    INTER_TRANSACTION_GAP_SECONDS = (30.0, 120.0)
+
+    def __init__(self, clock, rng, state):
+        super().__init__(clock, rng, state)
 
         self.transaction_count = self.rng.randint(3, 6)
 
@@ -176,20 +242,17 @@ class GeoHopEvent(Event):
     def _generate_transaction(self) -> Transaction:
         if self.previous_location is None:
             location = self.rng.choice(LOCATIONS)
-
         else:
             location = self.rng.choice(GEO_HOPS[self.previous_location])
 
         self.previous_location = location
-
-        self.current_time += timedelta(seconds=self.rng.randint(30, 120))
 
         return Transaction(
             transaction_id=self._random_transaction_id(),
             account_id=self.account,
             merchant_id=self._random_merchant(),
             amount=round(self.rng.lognormvariate(3.2, 0.6), 2),
-            timestamp=self.current_time,
+            timestamp=self._next_timestamp(self.INTER_TRANSACTION_GAP_SECONDS),
             location=location,
             merchant_category=self.rng.choice(CATEGORIES),
             device_id=self._random_device(),
@@ -199,8 +262,10 @@ class GeoHopEvent(Event):
 
 
 class CollusionEvent(Event):
-    def __init__(self, start_time, rng, state):
-        super().__init__(start_time, rng, state)
+    INTER_TRANSACTION_GAP_SECONDS = (10.0, 60.0)
+
+    def __init__(self, clock, rng, state):
+        super().__init__(clock, rng, state)
 
         self.transaction_count = self.rng.randint(5, 10)
 
@@ -211,7 +276,10 @@ class CollusionEvent(Event):
 
         if self.state.accounts:
             accounts = list(self.state.accounts.keys())
-            num_accounts = min(self.rng.randint(2, 5), len(accounts))
+            num_accounts = min(
+                self.rng.randint(2, 5),
+                len(accounts),
+            )
             self.accounts = self.rng.sample(accounts, num_accounts)
         else:
             self.accounts = [
@@ -221,14 +289,12 @@ class CollusionEvent(Event):
     def _generate_transaction(self) -> Transaction:
         account = self.rng.choice(self.accounts)
 
-        self.current_time += timedelta(seconds=self.rng.randint(10, 60))
-
         return Transaction(
             transaction_id=self._random_transaction_id(),
             account_id=account,
             merchant_id=self.merchant,
             amount=round(self.rng.lognormvariate(3.2, 0.6), 2),
-            timestamp=self.current_time,
+            timestamp=self._next_timestamp(self.INTER_TRANSACTION_GAP_SECONDS),
             location=self.rng.choice(LOCATIONS),
             merchant_category=self.rng.choice(CATEGORIES),
             device_id=self._random_device(),

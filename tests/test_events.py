@@ -1,9 +1,10 @@
+from datetime import datetime
 import random
 
 import numpy as np
 import pytest
-from datetime import datetime
 
+from simulator.clock import SimulationClock
 from simulator.events import (
     AmountSpikeEvent,
     CollusionEvent,
@@ -13,16 +14,23 @@ from simulator.events import (
 )
 from simulator.state import SimulatorState
 
+TEST_START_TIME = datetime(2026, 1, 1)
+
+
+def make_event(event_class, state, rng):
+    """Construct an event using an independent test clock."""
+    return event_class(
+        clock=SimulationClock(TEST_START_TIME),
+        rng=rng,
+        state=state,
+    )
+
 
 def test_legitimate_event_generates_one_transaction():
     state = SimulatorState()
     rng = random.Random(42)
 
-    event = LegitimateEvent(
-        start_time=datetime(2026, 1, 1),
-        rng=rng,
-        state=state,
-    )
+    event = make_event(LegitimateEvent, state, rng)
 
     txn = event.next_transaction()
 
@@ -73,11 +81,7 @@ def test_amount_spike_event_uses_existing_account_history(make_transaction):
             )
         )
 
-    event = AmountSpikeEvent(
-        start_time=__import__("datetime").datetime(2026, 1, 1),
-        rng=rng,
-        state=state,
-    )
+    event = make_event(AmountSpikeEvent, state, rng)
 
     txn = event.next_transaction()
 
@@ -95,11 +99,7 @@ def test_amount_spike_event_handles_insufficient_history():
     state = SimulatorState()
     rng = random.Random(42)
 
-    event = AmountSpikeEvent(
-        start_time=__import__("datetime").datetime(2026, 1, 1),
-        rng=rng,
-        state=state,
-    )
+    event = make_event(AmountSpikeEvent, state, rng)
 
     txn = event.next_transaction()
 
@@ -113,11 +113,7 @@ def test_velocity_event_generates_multiple_transactions():
     state = SimulatorState()
     rng = random.Random(42)
 
-    event = VelocityEvent(
-        start_time=__import__("datetime").datetime(2026, 1, 1),
-        rng=rng,
-        state=state,
-    )
+    event = make_event(VelocityEvent, state, rng)
 
     transactions = []
 
@@ -133,11 +129,7 @@ def test_velocity_event_uses_same_account():
     state = SimulatorState()
     rng = random.Random(42)
 
-    event = VelocityEvent(
-        start_time=__import__("datetime").datetime(2026, 1, 1),
-        rng=rng,
-        state=state,
-    )
+    event = make_event(VelocityEvent, state, rng)
 
     transactions = []
 
@@ -153,11 +145,7 @@ def test_velocity_event_timestamps_are_increasing_and_close():
     state = SimulatorState()
     rng = random.Random(42)
 
-    event = VelocityEvent(
-        start_time=__import__("datetime").datetime(2026, 1, 1),
-        rng=rng,
-        state=state,
-    )
+    event = make_event(VelocityEvent, state, rng)
 
     transactions = []
 
@@ -177,11 +165,7 @@ def test_velocity_event_is_persistent_across_calls():
     state = SimulatorState()
     rng = random.Random(42)
 
-    event = VelocityEvent(
-        start_time=__import__("datetime").datetime(2026, 1, 1),
-        rng=rng,
-        state=state,
-    )
+    event = make_event(VelocityEvent, state, rng)
 
     first = event.next_transaction()
     second = event.next_transaction()
@@ -195,11 +179,7 @@ def test_geo_hop_event_generates_multiple_transactions():
     state = SimulatorState()
     rng = random.Random(42)
 
-    event = GeoHopEvent(
-        start_time=__import__("datetime").datetime(2026, 1, 1),
-        rng=rng,
-        state=state,
-    )
+    event = make_event(GeoHopEvent, state, rng)
 
     transactions = []
 
@@ -215,11 +195,7 @@ def test_geo_hop_uses_same_account():
     state = SimulatorState()
     rng = random.Random(42)
 
-    event = GeoHopEvent(
-        start_time=__import__("datetime").datetime(2026, 1, 1),
-        rng=rng,
-        state=state,
-    )
+    event = make_event(GeoHopEvent, state, rng)
 
     transactions = []
 
@@ -235,11 +211,7 @@ def test_geo_hop_changes_location():
     state = SimulatorState()
     rng = random.Random(42)
 
-    event = GeoHopEvent(
-        start_time=__import__("datetime").datetime(2026, 1, 1),
-        rng=rng,
-        state=state,
-    )
+    event = make_event(GeoHopEvent, state, rng)
 
     transactions = []
 
@@ -255,11 +227,7 @@ def test_geo_hop_timestamps_are_increasing_and_close():
     state = SimulatorState()
     rng = random.Random(42)
 
-    event = GeoHopEvent(
-        start_time=__import__("datetime").datetime(2026, 1, 1),
-        rng=rng,
-        state=state,
-    )
+    event = make_event(GeoHopEvent, state, rng)
 
     transactions = []
 
@@ -279,11 +247,7 @@ def test_collusion_event_generates_multiple_transactions():
     state = SimulatorState()
     rng = random.Random(42)
 
-    event = CollusionEvent(
-        start_time=__import__("datetime").datetime(2026, 1, 1),
-        rng=rng,
-        state=state,
-    )
+    event = make_event(CollusionEvent, state, rng)
 
     transactions = []
 
@@ -299,11 +263,7 @@ def test_collusion_uses_same_merchant():
     state = SimulatorState()
     rng = random.Random(42)
 
-    event = CollusionEvent(
-        start_time=__import__("datetime").datetime(2026, 1, 1),
-        rng=rng,
-        state=state,
-    )
+    event = make_event(CollusionEvent, state, rng)
 
     transactions = []
 
@@ -319,11 +279,7 @@ def test_collusion_uses_multiple_accounts():
     state = SimulatorState()
     rng = random.Random(42)
 
-    event = CollusionEvent(
-        start_time=__import__("datetime").datetime(2026, 1, 1),
-        rng=rng,
-        state=state,
-    )
+    event = make_event(CollusionEvent, state, rng)
 
     transactions = []
 
@@ -349,11 +305,7 @@ def test_every_event_eventually_completes(event_class):
     state = SimulatorState()
     rng = random.Random(42)
 
-    event = event_class(
-        start_time=__import__("datetime").datetime(2026, 1, 1),
-        rng=rng,
-        state=state,
-    )
+    event = make_event(event_class, state, rng)
 
     max_steps = 100
 
@@ -370,11 +322,7 @@ def test_completed_event_cannot_generate_another_transaction():
     state = SimulatorState()
     rng = random.Random(42)
 
-    event = LegitimateEvent(
-        start_time=__import__("datetime").datetime(2026, 1, 1),
-        rng=rng,
-        state=state,
-    )
+    event = make_event(LegitimateEvent, state, rng)
 
     event.next_transaction()
 
