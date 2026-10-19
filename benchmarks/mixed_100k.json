@@ -1,0 +1,91 @@
+{
+  "scenario": "mixed",
+  "count": 100000,
+  "seed": 42,
+  "start_time": "2026-01-01T00:00:00",
+  "repeats": 3,
+  "environment": {
+    "python": "3.12.0b4",
+    "platform": "Windows-11-10.0.26200-SP0"
+  },
+  "results": {
+    "stream": {
+      "mode": "stream",
+      "count": 100000,
+      "throughput_runs": [
+        {
+          "mode": "stream",
+          "count": 100000,
+          "elapsed_seconds": 1.933788399968762,
+          "transactions_per_second": 51711.9660049752,
+          "state_transaction_count": 100000
+        },
+        {
+          "mode": "stream",
+          "count": 100000,
+          "elapsed_seconds": 4.226941100030672,
+          "transactions_per_second": 23657.76991765378,
+          "state_transaction_count": 100000
+        },
+        {
+          "mode": "stream",
+          "count": 100000,
+          "elapsed_seconds": 3.8149711000151,
+          "transactions_per_second": 26212.518359471764,
+          "state_transaction_count": 100000
+        }
+      ],
+      "median_elapsed_seconds": 3.8149711000151,
+      "median_transactions_per_second": 26212.518359471764,
+      "peak_memory_bytes_runs": [
+        39674718,
+        39674730,
+        39674776
+      ],
+      "median_peak_memory_bytes": 39674730
+    },
+    "batch": {
+      "mode": "batch",
+      "count": 100000,
+      "throughput_runs": [
+        {
+          "mode": "batch",
+          "count": 100000,
+          "elapsed_seconds": 3.9649031999870203,
+          "transactions_per_second": 25221.29670160103,
+          "state_transaction_count": 100000
+        },
+        {
+          "mode": "batch",
+          "count": 100000,
+          "elapsed_seconds": 3.8507649000384845,
+          "transactions_per_second": 25968.866600763035,
+          "state_transaction_count": 100000
+        },
+        {
+          "mode": "batch",
+          "count": 100000,
+          "elapsed_seconds": 1.5842993999831378,
+          "transactions_per_second": 63119.382612317044,
+          "state_transaction_count": 100000
+        }
+      ],
+      "median_elapsed_seconds": 3.8507649000384845,
+      "median_transactions_per_second": 25968.866600763035,
+      "peak_memory_bytes_runs": [
+        55274882,
+        55278968,
+        55276386
+      ],
+      "median_peak_memory_bytes": 55276386
+    }
+  },
+  "validation": {
+    "transaction_count": 100000,
+    "unique_transaction_ids": 100000,
+    "timestamps_strictly_increasing": true,
+    "merchant_state_consistent": true,
+    "first_timestamp": "2026-01-01T00:00:00",
+    "last_timestamp": "2026-01-11T14:07:30.300313"
+  }
+}
