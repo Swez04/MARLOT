@@ -4,9 +4,11 @@ version = "0.1.0"
 description = "Adaptive multi-agent RL for real-time fraud detection under concept drift"
 requires-python = ">=3.12"
 dependencies = [
+    "fastapi>=0.149.0",
     "numpy>=2.5.3",
     "pandas>=3.0.5",
     "scikit-learn>=1.9.0",
+    "uvicorn>=0.54.0",
 ]
 
 [tool.black]
@@ -14,5 +16,6 @@ target-version = ["py312"]
 
 [dependency-groups]
 dev = [
+    "httpx2>=2.15.1",
     "pytest>=9.1.1",
 ]
