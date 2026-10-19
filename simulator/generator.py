@@ -1,5 +1,6 @@
 import random
-from datetime import datetime
+from collections.abc import Sequence
+from datetime import datetime, timedelta
 from itertools import islice
 from typing import Iterator
 
@@ -13,6 +14,26 @@ class TransactionGenerator:
     def __init__(self, seed: int | None = None, state: SimulatorState | None = None):
         self.rng = random.Random(seed)
         self.state = state if state is not None else SimulatorState()
+        self._last_timestamp: datetime | None = None
+
+    def _get_validated_scenario(self, scenario_name: str):
+        """validates scenario names and ensures every configured event has a corresponding class in EVENT_TYPES"""
+        try:
+            scenario = get_scenario(scenario_name)
+        except (KeyError, ValueError) as exc:
+            raise ValueError(f"Unknown or invalid scenario: {scenario_name!r}") from exc
+
+        if not scenario.event_weights:
+            raise ValueError(f"Scenario {scenario_name!r} has no event weights")
+
+        unknown_events = set(scenario.event_weights) - set(EVENT_TYPES)
+        if unknown_events:
+            raise ValueError(
+                f"Scenario {scenario_name!r} references "
+                f"unknown events: {sorted(unknown_events)}"
+            )
+
+        return scenario
 
     def stream(
         self,
@@ -27,7 +48,7 @@ class TransactionGenerator:
         """
 
         start_time = start_time or datetime.now()
-        scenario = get_scenario(scenario_name)
+        scenario = self._get_validated_scenario(scenario_name)
         current_time = start_time
 
         while True:
@@ -51,8 +72,16 @@ class TransactionGenerator:
             while not event.is_complete:
                 txn = event.next_transaction()
 
+                # Enforce strictly increasing timestamps across event boundaries.
+                if (
+                    self._last_timestamp is not None
+                    and txn.timestamp <= self._last_timestamp
+                ):
+                    txn.timestamp = self._last_timestamp + timedelta(microseconds=1)
+
                 self.state.update(txn)  # state first, so the consumer sees it
                 current_time = txn.timestamp
+                self._last_timestamp = txn.timestamp
 
                 yield txn  # pause here until the consumer asks for the next one
 
@@ -62,56 +91,133 @@ class TransactionGenerator:
         scenario_name: str = "normal",
         start_time: datetime | None = None,
     ) -> list[Transaction]:
-        """Collect exactly n transactions from the lazy stream()."""
+        """Collect exactly n transactions from the lazy stream."""
+
+        if isinstance(n, bool) or not isinstance(n, int):
+            raise TypeError("n must be an integer")
 
         if n < 0:
             raise ValueError("n must be non-negative")
 
-        return list(islice(self.stream(scenario_name, start_time), n))
+        # Validate before generating or mutating simulator state.
+        self._get_validated_scenario(scenario_name)
+
+        if n == 0:
+            return []
+
+        transaction_stream = self.stream(
+            scenario_name=scenario_name,
+            start_time=start_time,
+        )
+
+        try:
+            return list(islice(transaction_stream, n))
+        finally:
+            transaction_stream.close()
 
     def generate_scenario_sequence(
         self,
-        scenarios: list[str],
-        n_per_scenario: int = 1000,
+        segments: Sequence[tuple[str, int]],
+        start_time: datetime | None = None,
     ) -> list[Transaction]:
-        """Concatenate several scenarios back to back — useful for testing
-        whether a detector adapts as fraud patterns shift over time."""
-        all_txns = []
-        t = datetime.now()
-        for scenario in scenarios:
-            batch = self.generate_stream(
-                n_per_scenario, scenario_name=scenario, start_time=t
+        """Generate finite scenario segments in sequence.
+
+        Each segment is a (scenario_name, transaction_count) pair.
+
+        Simulator state and RNG state persist across segments. Each segment
+        starts a fresh event stream, so unfinished events do not carry over.
+        """
+
+        if not isinstance(segments, Sequence) or isinstance(segments, (str, bytes)):
+            raise TypeError(
+                "segments must be a sequence of "
+                "(scenario_name, transaction_count) pairs"
             )
-            all_txns.extend(batch)
-            t = batch[-1].timestamp
-        return all_txns
+
+        if start_time is not None and not isinstance(start_time, datetime):
+            raise TypeError("start_time must be a datetime or None")
+
+        validated_segments: list[tuple[str, int]] = []
+
+        # Validate the entire request before generating anything.
+        for index, segment in enumerate(segments):
+            if not isinstance(segment, (tuple, list)) or len(segment) != 2:
+                raise ValueError(
+                    f"Segment {index} must contain "
+                    "(scenario_name, transaction_count)"
+                )
+
+            scenario_name, count = segment
+
+            if not isinstance(scenario_name, str) or not scenario_name.strip():
+                raise ValueError(f"Segment {index} has an invalid scenario name")
+
+            if isinstance(count, bool) or not isinstance(count, int):
+                raise TypeError(
+                    f"Transaction count for segment {index} must be an integer"
+                )
+
+            if count < 0:
+                raise ValueError(
+                    f"Transaction count for segment {index} " "must be non-negative"
+                )
+
+            # Validate even zero-length segments.
+            self._get_validated_scenario(scenario_name)
+
+            validated_segments.append((scenario_name, count))
+
+        # Empty requests should not generate transactions or alter state.
+        if not validated_segments or not any(
+            count > 0 for _, count in validated_segments
+        ):
+            return []
+
+        current_start = start_time if start_time is not None else datetime.now()
+        all_transactions: list[Transaction] = []
+
+        for scenario_name, count in validated_segments:
+            if count == 0:
+                continue
+
+            batch = self.generate_stream(
+                n=count,
+                scenario_name=scenario_name,
+                start_time=current_start,
+            )
+
+            all_transactions.extend(batch)
+
+            # Start the next segment strictly after the last transaction
+            # in this segment.
+            current_start = batch[-1].timestamp + timedelta(microseconds=1)
+
+        return all_transactions
 
 
 if __name__ == "__main__":
     gen = TransactionGenerator(seed=42)
 
     txns = gen.generate_scenario_sequence(
-        ["mixed", "normal", "velocity_attack"],
-        n_per_scenario=50,
+        [
+            ("mixed", 50),
+            ("normal", 50),
+            ("velocity_attack", 50),
+        ],
+        start_time=datetime(2026, 1, 1, 0, 0, 0),
     )
 
     print(f"Generated {len(txns)} transactions")
-
-    # 1. Basic count check
     assert len(txns) == 150
-    print("Correct number of transactions")
 
-    # 2. Check timestamps are chronological
     timestamps = [txn.timestamp for txn in txns]
     assert timestamps == sorted(timestamps)
     print("Timestamps are chronological")
 
-    # 3. Check transaction IDs are unique
     transaction_ids = [txn.transaction_id for txn in txns]
     assert len(transaction_ids) == len(set(transaction_ids))
     print("Transaction IDs are unique")
 
-    # 4. Check every transaction has a valid fraud label/type
     valid_fraud_types = {
         "",
         "amount_spike",
@@ -122,23 +228,11 @@ if __name__ == "__main__":
 
     assert all(txn.fraud_type in valid_fraud_types for txn in txns)
     assert all(txn.fraud_label in {0, 1} for txn in txns)
-    print("Fraud labels/types are valid")
 
-    # 5. Check fraud label matches fraud type
     assert all(
         (txn.fraud_label == 0 and txn.fraud_type == "")
         or (txn.fraud_label == 1 and txn.fraud_type != "")
         for txn in txns
     )
-    print("Fraud labels match fraud types")
 
-    # 6. Print distribution
-    fraud_by_type = {}
-
-    for txn in txns:
-        fraud_type = txn.fraud_type or "legitimate"
-        fraud_by_type[fraud_type] = fraud_by_type.get(fraud_type, 0) + 1
-
-    print("\nTransaction distribution:")
-    for fraud_type, count in fraud_by_type.items():
-        print(f"  {fraud_type}: {count}")
+    print("Fraud labels/types are valid")
