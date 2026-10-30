@@ -9,7 +9,7 @@ Run: python run_baseline.py
 
 from simulator.generator import generate_stream, generate_regime_sequence
 from detectors.rules import RuleBasedDetector
-from detectors.isolation_forest import IsolationForestDetector
+from detection.isolation_forest import IsolationForestDetector
 from detectors.autoencoder import AutoencoderDetector
 from evaluation.metrics import evaluate, time_detector
 

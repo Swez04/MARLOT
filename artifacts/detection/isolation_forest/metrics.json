@@ -1,0 +1,90 @@
+{
+  "model": "IsolationForest",
+  "configuration": {
+    "n_estimators": 100,
+    "random_state": 42,
+    "n_jobs": -1,
+    "contamination": "auto"
+  },
+  "feature_count": 37,
+  "datasets": {
+    "train": {
+      "count": 50000,
+      "fraud_count": 0,
+      "fraud_prevalence": 0.0
+    },
+    "validation": {
+      "count": 20000,
+      "fraud_count": 3460,
+      "fraud_prevalence": 0.173
+    },
+    "test": {
+      "count": 20000,
+      "fraud_count": 4292,
+      "fraud_prevalence": 0.2146
+    }
+  },
+  "threshold_selection": {
+    "method": "maximum_validation_f1",
+    "threshold": 0.500852895673561,
+    "validation_f1": 0.4508736751647092,
+    "validation_precision": 0.33666048766576356,
+    "validation_recall": 0.6823699421965318
+  },
+  "validation_metrics": {
+    "count": 20000,
+    "fraud_prevalence": 0.173,
+    "predicted_positive_rate": 0.35065,
+    "threshold": 0.500852895673561,
+    "roc_auc": 0.7532473736815986,
+    "average_precision": 0.3195653444849022,
+    "precision": 0.33666048766576356,
+    "recall": 0.6823699421965318,
+    "f1": 0.4508736751647093,
+    "confusion_matrix": {
+      "tn": 11888,
+      "fp": 4652,
+      "fn": 1099,
+      "tp": 2361
+    }
+  },
+  "test_metrics": {
+    "count": 20000,
+    "fraud_prevalence": 0.2146,
+    "predicted_positive_rate": 0.3626,
+    "threshold": 0.500852895673561,
+    "roc_auc": 0.7532905541272681,
+    "average_precision": 0.39731344412615677,
+    "precision": 0.37755102040816324,
+    "recall": 0.6379310344827587,
+    "f1": 0.47435897435897434,
+    "confusion_matrix": {
+      "tn": 11194,
+      "fp": 4514,
+      "fn": 1554,
+      "tp": 2738
+    },
+    "fraud_type_metrics": {
+      "amount_spike": {
+        "support": 245,
+        "recall": 0.9959183673469387
+      },
+      "collusion": {
+        "support": 1701,
+        "recall": 0.823045267489712
+      },
+      "geo_hop": {
+        "support": 956,
+        "recall": 0.303347280334728
+      },
+      "velocity": {
+        "support": 1390,
+        "recall": 0.5784172661870504
+      }
+    }
+  },
+  "environment": {
+    "scikit_learn": "1.9.0",
+    "created_at_utc": "2026-10-30T14:13:35.510170+00:00"
+  }
+}

@@ -12,7 +12,7 @@ High reconstruction error on unseen data = anomaly = likely fraud.
 import numpy as np
 from sklearn.neural_network import MLPRegressor
 
-from detectors.isolation_forest import featurize  # reuse same features
+from detection.isolation_forest import featurize  # reuse same features
 
 
 class AutoencoderDetector:

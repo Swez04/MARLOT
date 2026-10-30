@@ -18,7 +18,6 @@ from detection.features import (
     transform_features,
 )
 
-
 BASE_TIME = datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc)
 
 
@@ -111,13 +110,9 @@ def test_account_rolling_counts_and_amount_deviation():
     assert third["account_txn_count_5m"] == 2
     assert third["seconds_since_prev_account_txn"] == 31.0
 
-    expected_deviation = (
-        np.log1p(200.0) - np.log1p(100.0)
-    )
+    expected_deviation = np.log1p(200.0) - np.log1p(100.0)
 
-    assert second["log_amount_deviation"] == pytest.approx(
-        expected_deviation
-    )
+    assert second["log_amount_deviation"] == pytest.approx(expected_deviation)
 
 
 def test_sixty_second_window_includes_its_lower_boundary():
@@ -336,17 +331,12 @@ def test_preprocessor_handles_unseen_categories():
     preprocessor = fit_preprocessor(X_train)
 
     X_train_processed = transform_features(X_train, preprocessor)
-    X_validation_processed = transform_features(
-        X_validation, preprocessor
-    )
+    X_validation_processed = transform_features(X_validation, preprocessor)
 
     assert X_train_processed.shape[0] == 2
     assert X_validation_processed.shape[0] == 1
 
-    assert (
-        X_train_processed.shape[1]
-        == X_validation_processed.shape[1]
-    )
+    assert X_train_processed.shape[1] == X_validation_processed.shape[1]
 
     assert np.isfinite(X_train_processed).all()
     assert np.isfinite(X_validation_processed).all()
@@ -413,3 +403,150 @@ def test_processed_matrix_contains_only_finite_values():
     assert matrix.ndim == 2
     assert matrix.shape[0] == len(records)
     assert np.isfinite(matrix).all()
+
+
+def make_feature_record(
+    index: int,
+    *,
+    account_id: str = "account_1",
+    amount: float = 100.0,
+    location: str = "IN-BLR",
+    merchant_category: str = "electronics",
+    merchant_id: str = "merchant_1",
+):
+    return {
+        "transaction_id": f"txn_{index}",
+        "account_id": account_id,
+        "merchant_id": merchant_id,
+        "device_id": "device_1",
+        "amount": amount,
+        "timestamp": (
+            datetime(2025, 1, 1, tzinfo=timezone.utc) + timedelta(seconds=index * 60)
+        ),
+        "location": location,
+        "merchant_category": merchant_category,
+    }
+
+
+def test_account_amount_features_use_historical_amounts():
+    builder = HistoricalFeatureBuilder()
+
+    historical_amounts = [100, 105, 95, 110, 100]
+
+    for index, amount in enumerate(historical_amounts):
+        builder.transform_one(make_feature_record(index, amount=amount))
+
+    features = builder.transform_one(make_feature_record(5, amount=500))
+
+    assert features["has_account_amount_history"] == 1
+    assert features["has_reliable_account_amount_history"] == 1
+
+    assert features["account_amount_ratio"] == pytest.approx(5.0)
+
+    assert features["account_amount_robust_zscore"] > 0
+    assert features["log_amount_deviation"] > 0
+
+
+def test_account_amount_features_are_neutral_with_insufficient_history():
+    builder = HistoricalFeatureBuilder()
+
+    builder.transform_one(make_feature_record(0, amount=100))
+
+    features = builder.transform_one(make_feature_record(1, amount=500))
+
+    assert features["has_account_amount_history"] == 1
+    assert features["has_reliable_account_amount_history"] == 0
+
+    assert features["account_amount_ratio"] == 1.0
+    assert features["account_amount_robust_zscore"] == 0.0
+
+
+def test_category_amount_deviation_uses_previous_transactions():
+    builder = HistoricalFeatureBuilder()
+
+    historical_amounts = [100, 105, 95, 110, 100]
+
+    for index, amount in enumerate(historical_amounts):
+        builder.transform_one(
+            make_feature_record(
+                index,
+                account_id=f"account_{index}",
+                amount=amount,
+            )
+        )
+
+    features = builder.transform_one(
+        make_feature_record(
+            5,
+            account_id="new_account",
+            amount=500,
+        )
+    )
+
+    assert features["has_category_amount_history"] == 1
+    assert features["category_amount_deviation"] > 0
+
+
+def test_category_amount_history_does_not_include_current_transaction():
+    builder = HistoricalFeatureBuilder()
+
+    first_features = builder.transform_one(make_feature_record(0, amount=500))
+
+    assert first_features["has_category_amount_history"] == 0
+    assert first_features["category_amount_deviation"] == 0.0
+
+
+def test_geo_features_detect_implausible_travel():
+    builder = HistoricalFeatureBuilder()
+
+    builder.transform_one(
+        make_feature_record(
+            0,
+            location="IN-BLR",
+        )
+    )
+
+    features = builder.transform_one(
+        make_feature_record(
+            1,
+            location="GB-LON",
+        )
+    )
+
+    assert features["has_geo_coordinates"] == 1
+    assert features["geo_distance_km"] > 7000
+    assert features["geo_travel_speed_kmph"] > 900
+    assert features["impossible_travel_flag"] == 1
+
+
+def test_unknown_location_does_not_create_fake_geo_features():
+    builder = HistoricalFeatureBuilder()
+
+    builder.transform_one(
+        make_feature_record(
+            0,
+            location="IN-BLR",
+        )
+    )
+
+    features = builder.transform_one(
+        make_feature_record(
+            1,
+            location="UNKNOWN-LOCATION",
+        )
+    )
+
+    assert features["has_geo_coordinates"] == 0
+    assert features["geo_distance_km"] == 0.0
+    assert features["geo_travel_speed_kmph"] == 0.0
+    assert features["impossible_travel_flag"] == 0
+
+
+def test_feature_builder_outputs_all_declared_features():
+    from detection.features import FEATURE_COLUMNS
+
+    builder = HistoricalFeatureBuilder()
+
+    features = builder.transform_one(make_feature_record(0))
+
+    assert set(features) == set(FEATURE_COLUMNS)
