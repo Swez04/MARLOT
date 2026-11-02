@@ -11,8 +11,10 @@ from simulator.events import (
     GeoHopEvent,
     LegitimateEvent,
     VelocityEvent,
+    LOCATIONS,
 )
 from simulator.state import SimulatorState
+from simulator.generator import TransactionGenerator
 
 TEST_START_TIME = datetime(2026, 1, 1)
 
@@ -24,6 +26,62 @@ def make_event(event_class, state, rng):
         rng=rng,
         state=state,
     )
+
+
+def test_normal_transactions_keep_account_location():
+    generator = TransactionGenerator(seed=42)
+
+    transactions = generator.generate_stream(
+        n=5000,
+        scenario_name="normal",
+    )
+
+    account_locations = {}
+
+    for txn in transactions:
+        if txn.account_id not in account_locations:
+            account_locations[txn.account_id] = txn.location
+
+        assert txn.location == account_locations[txn.account_id]
+
+
+def test_non_geo_fraud_preserves_account_location():
+    generator = TransactionGenerator(seed=42)
+
+    transactions = generator.generate_stream(
+        n=5000,
+        scenario_name="mixed",
+    )
+
+    account_locations = {}
+
+    for txn in transactions:
+        previous_location = account_locations.get(txn.account_id)
+
+        if txn.fraud_type != "geo_hop" and previous_location is not None:
+            assert txn.location == previous_location
+
+        account_locations[txn.account_id] = txn.location
+
+
+def test_geo_hop_starts_away_from_previous_account_location():
+    generator = TransactionGenerator(seed=42)
+
+    generator.generate_stream(
+        n=1000,
+        scenario_name="normal",
+    )
+
+    transactions = generator.generate_stream(
+        n=100,
+        scenario_name="geo_attack",
+    )
+
+    for txn in transactions:
+        if txn.fraud_type != "geo_hop":
+            continue
+
+        assert txn.location in LOCATIONS
 
 
 def test_legitimate_event_generates_one_transaction():

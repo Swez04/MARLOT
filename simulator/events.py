@@ -139,6 +139,26 @@ class Event(ABC):
     def _random_device(self) -> str:
         return f"device_{self.rng.randint(1, 1000):04d}"
 
+    def _last_known_location(self, account_id: str) -> str | None:
+        transactions = self.state.recent_transactions(account_id)
+
+        if not transactions:
+            return None
+
+        return transactions[-1].location
+
+    def _usual_location(self, account_id: str) -> str:
+        """
+        Return the account's previous location.
+        New accounts receive an initially random location.
+        """
+        location = self._last_known_location(account_id)
+
+        if location is not None:
+            return location
+
+        return self.rng.choice(LOCATIONS)
+
 
 class LegitimateEvent(Event):
     def __init__(self, clock, rng, state):
@@ -146,13 +166,16 @@ class LegitimateEvent(Event):
         self.transaction_count = 1
 
     def _generate_transaction(self) -> Transaction:
+        account = self._random_account()
+        location = self._usual_location(account)
+
         return Transaction(
             transaction_id=self._random_transaction_id(),
-            account_id=self._random_account(),
+            account_id=account,
             merchant_id=self._random_merchant(),
             amount=round(self.rng.lognormvariate(3.2, 0.6), 2),
             timestamp=self._next_timestamp(),
-            location=self.rng.choice(LOCATIONS),
+            location=location,
             merchant_category=self.rng.choice(CATEGORIES),
             device_id=self._random_device(),
             fraud_label=0,
@@ -188,7 +211,7 @@ class AmountSpikeEvent(Event):
             merchant_id=self._random_merchant(),
             amount=amount,
             timestamp=self._next_timestamp(),
-            location=self.rng.choice(LOCATIONS),
+            location=self._usual_location(account),
             merchant_category=self.rng.choice(CATEGORIES),
             device_id=self._random_device(),
             fraud_label=1,
@@ -216,7 +239,7 @@ class VelocityEvent(Event):
             merchant_id=self._random_merchant(),
             amount=round(self.rng.lognormvariate(3.2, 0.6), 2),
             timestamp=self._next_timestamp(self.INTER_TRANSACTION_GAP_SECONDS),
-            location=self.rng.choice(LOCATIONS),
+            location=self._usual_location(self.account),
             merchant_category=self.rng.choice(CATEGORIES),
             device_id=self._random_device(),
             fraud_label=1,
@@ -237,7 +260,7 @@ class GeoHopEvent(Event):
         else:
             self.account = self._random_account()
 
-        self.previous_location = None
+        self.previous_location = self._last_known_location(self.account)
 
     def _generate_transaction(self) -> Transaction:
         if self.previous_location is None:
@@ -295,7 +318,7 @@ class CollusionEvent(Event):
             merchant_id=self.merchant,
             amount=round(self.rng.lognormvariate(3.2, 0.6), 2),
             timestamp=self._next_timestamp(self.INTER_TRANSACTION_GAP_SECONDS),
-            location=self.rng.choice(LOCATIONS),
+            location=self._usual_location(account),
             merchant_category=self.rng.choice(CATEGORIES),
             device_id=self._random_device(),
             fraud_label=1,
