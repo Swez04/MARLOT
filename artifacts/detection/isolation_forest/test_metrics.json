@@ -1,0 +1,79 @@
+{
+    "model": "IsolationForest",
+    "feature_set": "E_ratio_category",
+    "configuration": {
+        "n_estimators": 300,
+        "max_samples": 256,
+        "contamination": "auto",
+        "max_features": 1.0,
+        "random_state": 42,
+        "n_jobs": -1
+    },
+    "threshold": 0.5102980710521986,
+    "feature_columns": [
+        "log_amount",
+        "hour_sin",
+        "hour_cos",
+        "weekday_sin",
+        "weekday_cos",
+        "account_txn_count_60s",
+        "account_txn_count_5m",
+        "seconds_since_prev_account_txn",
+        "has_prev_account_txn",
+        "log_amount_deviation",
+        "has_account_amount_history",
+        "is_new_device_for_account",
+        "location_changed",
+        "merchant_txn_count_5m",
+        "merchant_distinct_accounts_5m",
+        "merchant_category",
+        "location",
+        "account_amount_ratio",
+        "category_amount_deviation"
+    ],
+    "raw_feature_count": 19,
+    "processed_feature_count": 30,
+    "test_dataset": {
+        "path": "data\\detection\\test.jsonl",
+        "count": 20000,
+        "fraud_count": 4303,
+        "fraud_prevalence": 0.21515
+    },
+    "test_metrics": {
+        "count": 20000,
+        "fraud_prevalence": 0.21515,
+        "predicted_positive_rate": 0.26435,
+        "threshold": 0.5102980710521986,
+        "roc_auc": 0.8876604207162686,
+        "average_precision": 0.7604995335643868,
+        "precision": 0.6103650463400795,
+        "recall": 0.7499419009993028,
+        "f1": 0.672992700729927,
+        "false_positive_rate": 0.13123526788558323,
+        "confusion_matrix": {
+            "tn": 13637,
+            "fp": 2060,
+            "fn": 1076,
+            "tp": 3227
+        },
+        "fraud_type_metrics": {
+            "amount_spike": {
+                "support": 227,
+                "recall": 1.0
+            },
+            "collusion": {
+                "support": 1786,
+                "recall": 0.780515117581187
+            },
+            "geo_hop": {
+                "support": 876,
+                "recall": 0.454337899543379
+            },
+            "velocity": {
+                "support": 1414,
+                "recall": 0.8543140028288543
+            }
+        },
+        "macro_recall": 0.772291754988355
+    }
+}

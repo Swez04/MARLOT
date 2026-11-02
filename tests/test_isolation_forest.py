@@ -19,7 +19,13 @@ def training_features():
 
 
 def test_fit_and_score(training_features):
-    detector = IsolationForestDetector().fit(training_features)
+    detector = IsolationForestDetector(
+        IsolationForestConfig(
+            n_estimators=20,
+            max_samples=128,
+            random_state=42,
+        )
+    ).fit(training_features)
 
     scores = detector.score_samples(training_features)
 
@@ -28,7 +34,13 @@ def test_fit_and_score(training_features):
 
 
 def test_score_ordering_is_higher_for_anomalies(training_features):
-    detector = IsolationForestDetector().fit(training_features)
+    detector = IsolationForestDetector(
+        IsolationForestConfig(
+            n_estimators=20,
+            max_samples=128,
+            random_state=42,
+        )
+    ).fit(training_features)
 
     normal = np.zeros((1, 4), dtype=np.float32)
     unusual = np.full((1, 4), 8.0, dtype=np.float32)
@@ -40,14 +52,26 @@ def test_score_ordering_is_higher_for_anomalies(training_features):
 
 
 def test_predict_requires_threshold(training_features):
-    detector = IsolationForestDetector().fit(training_features)
+    detector = IsolationForestDetector(
+        IsolationForestConfig(
+            n_estimators=20,
+            max_samples=128,
+            random_state=42,
+        )
+    ).fit(training_features)
 
     with pytest.raises(RuntimeError, match="threshold"):
         detector.predict(training_features[:2])
 
 
 def test_threshold_and_prediction(training_features):
-    detector = IsolationForestDetector().fit(training_features)
+    detector = IsolationForestDetector(
+        IsolationForestConfig(
+            n_estimators=20,
+            max_samples=128,
+            random_state=42,
+        )
+    ).fit(training_features)
 
     threshold = float(np.median(detector.score_samples(training_features)))
     detector.set_threshold(threshold)
@@ -123,7 +147,15 @@ def test_save_reload_preserves_scores_and_threshold(
     training_features,
     tmp_path,
 ):
-    detector = IsolationForestDetector().fit(training_features)
+    detector = IsolationForestDetector(
+        IsolationForestConfig(
+            n_estimators=20,
+            max_samples=128,
+            random_state=42,
+        )
+    )
+    detector.fit(training_features)
+
     detector.set_threshold(0.55)
 
     expected = detector.score_samples(training_features[:10])

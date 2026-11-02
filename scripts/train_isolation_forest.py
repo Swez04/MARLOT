@@ -1,13 +1,11 @@
-"""Train and evaluate MARLOT's Isolation Forest baseline."""
-
 from __future__ import annotations
 
 import argparse
-import csv
 import json
-import shutil
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import joblib
 import numpy as np
@@ -16,175 +14,251 @@ import sklearn
 from detection.evaluation import (
     evaluate_by_fraud_type,
     evaluate_scores,
-    select_f1_threshold,
+    select_coverage_threshold,
+)
+from detection.features import (
+    E_RATIO_CATEGORY_FEATURES,
+    HistoricalFeatureBuilder,
+    extract_labels,
+    extract_metadata,
+    fit_preprocessor,
+    transform_features,
 )
 from detection.isolation_forest import (
     IsolationForestConfig,
     IsolationForestDetector,
 )
 
-DEFAULT_PROCESSED_DIR = Path("data/detection/processed")
+DEFAULT_DATA_DIR = Path("data/detection")
 DEFAULT_OUTPUT_DIR = Path("artifacts/detection/isolation_forest")
+
+FEATURE_SET_NAME = "E_ratio_category"
+MAXIMUM_FALSE_POSITIVE_RATE = 0.15
+MINIMUM_FRAUD_TYPE_RECALL = 0.50
+
+# Reference from the previously selected coverage-oriented experiment.
+# This is a reproduction diagnostic only; it does not force the threshold.
+REFERENCE_THRESHOLD = 0.5102980710521986
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
-
+    parser = argparse.ArgumentParser(
+        description=(
+            "Train the selected coverage-oriented Isolation Forest using "
+            "raw train and validation JSONL files. The test split is never read."
+        )
+    )
     parser.add_argument(
-        "--processed-dir",
+        "--data-dir",
         type=Path,
-        default=DEFAULT_PROCESSED_DIR,
+        default=DEFAULT_DATA_DIR,
+        help="Directory containing train.jsonl and validation.jsonl.",
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
         default=DEFAULT_OUTPUT_DIR,
+        help="Directory in which the candidate artifact and report are saved.",
     )
-    parser.add_argument("--n-estimators", type=int, default=100)
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--n-jobs", type=int, default=-1)
-
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Allow replacing output files in a non-empty output directory.",
+    )
     return parser.parse_args(argv)
 
 
-def load_split(path: Path) -> dict[str, np.ndarray]:
-    """Load and validate one processed dataset split."""
-
+def load_jsonl(path: Path) -> list[dict[str, Any]]:
+    """Load a JSONL transaction split and validate its record structure."""
     if not path.is_file():
-        raise FileNotFoundError(f"Processed split not found: {path}")
+        raise FileNotFoundError(f"Dataset not found: {path}")
 
-    with np.load(path, allow_pickle=False) as data:
-        required = {"X", "y", "transaction_id", "fraud_type"}
-        missing = required - set(data.files)
+    records: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8") as file:
+        for line_number, line in enumerate(file, start=1):
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"Invalid JSON in {path}, line {line_number}."
+                ) from exc
+            if not isinstance(record, dict):
+                raise ValueError(
+                    f"Expected a JSON object in {path}, line {line_number}."
+                )
+            records.append(record)
 
-        if missing:
-            raise ValueError(f"{path} is missing arrays: {sorted(missing)}")
-
-        result = {name: data[name].copy() for name in required}
-
-    X = result["X"]
-    y = result["y"]
-    ids = result["transaction_id"]
-    fraud_types = result["fraud_type"]
-
-    if X.ndim != 2 or X.shape[0] == 0:
-        raise ValueError(f"{path}: X must be a non-empty 2D matrix")
-
-    n = X.shape[0]
-
-    if not all(len(result[key]) == n for key in ("y", "transaction_id", "fraud_type")):
-        raise ValueError(f"{path}: arrays are not row-aligned")
-
-    if not np.isfinite(X).all():
-        raise ValueError(f"{path}: feature matrix contains non-finite values")
-
-    if not np.isin(y, [0, 1]).all():
-        raise ValueError(f"{path}: labels must be 0 or 1")
-
-    if len(set(ids.tolist())) != n:
-        raise ValueError(f"{path}: duplicate transaction IDs")
-
-    return result
+    if not records:
+        raise ValueError(f"Dataset is empty: {path}")
+    return records
 
 
-def write_json(path: Path, value: dict) -> None:
+def prepare_split(path: Path) -> dict[str, Any]:
+    """Build chronological historical features, labels, and metadata."""
+    records = load_jsonl(path)
+    raw_features = HistoricalFeatureBuilder().transform(records)
+    labels = extract_labels(records)
+    metadata = extract_metadata(records)
+
+    transaction_ids = metadata["transaction_id"].fillna("").astype(str).to_numpy()
+    fraud_types = metadata["fraud_type"].fillna("").astype(str).to_numpy()
+
+    row_count = len(raw_features)
+    if not (len(labels) == len(transaction_ids) == len(fraud_types) == row_count):
+        raise ValueError(f"Features, labels, and metadata are not aligned: {path}")
+    if np.any(transaction_ids == ""):
+        raise ValueError(f"Empty transaction ID found: {path}")
+    if len(set(transaction_ids.tolist())) != row_count:
+        raise ValueError(f"Duplicate transaction IDs found: {path}")
+    if np.any((labels == 0) & (fraud_types != "")):
+        raise ValueError(f"Legitimate records have a fraud_type: {path}")
+    if np.any((labels == 1) & (fraud_types == "")):
+        raise ValueError(f"Fraudulent records are missing fraud_type: {path}")
+
+    return {
+        "X_raw": raw_features,
+        "y": labels,
+        "transaction_id": transaction_ids,
+        "fraud_type": fraud_types,
+    }
+
+
+def add_classification_metrics(
+    metrics: dict[str, Any],
+    labels: np.ndarray,
+    fraud_types: np.ndarray,
+    predictions: np.ndarray,
+) -> None:
+    """Add FPR and per-fraud-type recall to evaluate_scores output."""
+    confusion = metrics["confusion_matrix"]
+    tn = int(confusion["tn"])
+    fp = int(confusion["fp"])
+    metrics["false_positive_rate"] = float(fp / (fp + tn)) if (fp + tn) else 0.0
+
+    per_type = evaluate_by_fraud_type(labels, fraud_types, predictions)
+    if not per_type:
+        raise ValueError("No fraud types were available for macro recall.")
+
+    metrics["fraud_type_metrics"] = per_type
+    metrics["macro_recall"] = float(
+        np.mean([values["recall"] for values in per_type.values()])
+    )
+
+
+def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(
-        json.dumps(value, indent=2, allow_nan=False) + "\n",
+        json.dumps(payload, indent=4, allow_nan=False) + "\n",
         encoding="utf-8",
     )
 
 
-def run_experiment(args: argparse.Namespace) -> dict:
-    processed_dir: Path = args.processed_dir
-    output_dir: Path = args.output_dir
+def run_training(args: argparse.Namespace) -> dict[str, Any]:
+    """Train on legitimate-only train data and select threshold on validation."""
+    train = prepare_split(args.data_dir / "train.jsonl")
+    validation = prepare_split(args.data_dir / "validation.jsonl")
 
-    train = load_split(processed_dir / "train.npz")
-    validation = load_split(processed_dir / "validation.npz")
-    test = load_split(processed_dir / "test.npz")
+    X_train_raw = train["X_raw"]
+    y_train = train["y"]
+    X_val_raw = validation["X_raw"]
+    y_val = validation["y"]
 
-    X_train, y_train = train["X"], train["y"]
-    X_val, y_val = validation["X"], validation["y"]
-    X_test, y_test = test["X"], test["y"]
-
-    # This is a one-class, normal-only training experiment.
     if np.any(y_train != 0):
         raise ValueError(
-            "Training split contains fraud labels. "
-            "This baseline expects legitimate-only training data."
+            "Training split contains fraud labels. This baseline expects "
+            "legitimate-only training data."
+        )
+    if np.unique(y_val).size != 2:
+        raise ValueError(
+            "Validation split must contain both legitimate and fraud rows."
         )
 
-    feature_counts = {
-        X_train.shape[1],
-        X_val.shape[1],
-        X_test.shape[1],
-    }
-    if len(feature_counts) != 1:
-        raise ValueError("Feature counts differ between dataset splits")
+    # The selected feature list and its ordering come from features.py.
+    feature_columns = tuple(E_RATIO_CATEGORY_FEATURES)
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    config = IsolationForestConfig(
-        n_estimators=args.n_estimators,
-        random_state=args.seed,
-        n_jobs=args.n_jobs,
-        contamination="auto",
+    print("\nFitting selected preprocessor on training data only...")
+    preprocessor = fit_preprocessor(
+        X_train_raw,
+        feature_columns=feature_columns,
+    )
+    X_train = transform_features(
+        X_train_raw,
+        preprocessor,
+        feature_columns=feature_columns,
+    )
+    X_val = transform_features(
+        X_val_raw,
+        preprocessor,
+        feature_columns=feature_columns,
     )
 
+    if X_train.shape[1] != 30 or X_val.shape[1] != 30:
+        raise ValueError(
+            "The selected feature pipeline should produce 30 processed "
+            f"features; got train={X_train.shape[1]}, validation={X_val.shape[1]}."
+        )
+
+    config = IsolationForestConfig(
+        n_estimators=300,
+        max_samples=256,
+        max_features=1.0,
+        contamination="auto",
+        random_state=42,
+        n_jobs=-1,
+    )
+
+    print("\nTraining Isolation Forest...")
     detector = IsolationForestDetector(config)
     detector.fit(X_train)
 
-    # Validation data selects the threshold.
-    val_scores = detector.score_samples(X_val)
-    threshold, threshold_diagnostics = select_f1_threshold(
-        y_val,
-        val_scores,
+    print("\nScoring validation data and selecting threshold...")
+    validation_scores = detector.score_samples(X_val)
+    threshold, threshold_diagnostics = select_coverage_threshold(
+        y_validation=y_val,
+        validation_scores=validation_scores,
+        fraud_types=validation["fraud_type"],
+        maximum_false_positive_rate=MAXIMUM_FALSE_POSITIVE_RATE,
+        minimum_fraud_type_recall=MINIMUM_FRAUD_TYPE_RECALL,
     )
     detector.set_threshold(threshold)
+    validation_predictions = detector.predict(X_val)
 
     validation_metrics = evaluate_scores(
         y_val,
-        val_scores,
+        validation_scores,
         threshold,
     )
-
-    # The test set is evaluated once using the frozen threshold.
-    test_scores = detector.score_samples(X_test)
-    test_predictions = detector.predict(X_test)
-
-    test_metrics = evaluate_scores(
-        y_test,
-        test_scores,
-        threshold,
-    )
-    test_metrics["fraud_type_metrics"] = evaluate_by_fraud_type(
-        y_test,
-        test["fraud_type"],
-        test_predictions,
+    add_classification_metrics(
+        validation_metrics,
+        y_val,
+        validation["fraud_type"],
+        validation_predictions,
     )
 
-    detector.save(output_dir / "model.joblib")
-
-    preprocessor_path = processed_dir / "preprocessor.joblib"
-    if not preprocessor_path.is_file():
-        raise FileNotFoundError(
-            "Fitted Step 12 preprocessor not found: " f"{preprocessor_path}"
-        )
-
-    # Copy the exact fitted preprocessor used for these matrices.
-    shutil.copy2(
-        preprocessor_path,
-        output_dir / "preprocessor.joblib",
-    )
-
-    metrics = {
-        "model": "IsolationForest",
-        "configuration": {
-            "n_estimators": args.n_estimators,
-            "random_state": args.seed,
-            "n_jobs": args.n_jobs,
-            "contamination": "auto",
+    artifact = {
+        "artifact_type": "marlot_isolation_forest_bundle",
+        "artifact_version": 1,
+        "feature_set": FEATURE_SET_NAME,
+        "model": detector.model,
+        "preprocessor": preprocessor,
+        "feature_columns": list(feature_columns),
+        "threshold": float(threshold),
+        "configuration": asdict(config),
+        "threshold_selection": {
+            **threshold_diagnostics,
+            "threshold": float(threshold),
         },
-        "feature_count": int(X_train.shape[1]),
+        "validation_metrics": validation_metrics,
+    }
+
+    training_report = {
+        "model": "IsolationForest",
+        "feature_set": FEATURE_SET_NAME,
+        "configuration": asdict(config),
+        "feature_columns": list(feature_columns),
+        "raw_feature_count": len(feature_columns),
+        "processed_feature_count": int(X_train.shape[1]),
         "datasets": {
             "train": {
                 "count": int(len(y_train)),
@@ -196,84 +270,54 @@ def run_experiment(args: argparse.Namespace) -> dict:
                 "fraud_count": int(y_val.sum()),
                 "fraud_prevalence": float(y_val.mean()),
             },
-            "test": {
-                "count": int(len(y_test)),
-                "fraud_count": int(y_test.sum()),
-                "fraud_prevalence": float(y_test.mean()),
-            },
         },
-        "threshold_selection": {
-            "method": "maximum_validation_f1",
-            "threshold": threshold,
-            **threshold_diagnostics,
-        },
+        "threshold_selection": artifact["threshold_selection"],
         "validation_metrics": validation_metrics,
-        "test_metrics": test_metrics,
         "environment": {
             "scikit_learn": sklearn.__version__,
             "created_at_utc": datetime.now(timezone.utc).isoformat(),
         },
     }
 
-    write_json(output_dir / "metrics.json", metrics)
+    # This script deliberately does not load, inspect, or evaluate test.jsonl.
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    model_path = args.output_dir / "selected_model.joblib"
+    report_path = args.output_dir / "training_metrics.json"
 
-    predictions_path = output_dir / "predictions_test.csv"
-    with predictions_path.open(
-        "w",
-        newline="",
-        encoding="utf-8",
-    ) as file:
-        writer = csv.DictWriter(
-            file,
-            fieldnames=[
-                "transaction_id",
-                "fraud_label",
-                "fraud_type",
-                "risk_score",
-                "predicted_label",
-            ],
-        )
-        writer.writeheader()
+    joblib.dump(artifact, model_path)
+    write_json(report_path, training_report)
 
-        for i in range(len(y_test)):
-            writer.writerow(
-                {
-                    "transaction_id": str(test["transaction_id"][i]),
-                    "fraud_label": int(y_test[i]),
-                    "fraud_type": str(test["fraud_type"][i]),
-                    "risk_score": float(test_scores[i]),
-                    "predicted_label": int(test_predictions[i]),
-                }
-            )
+    threshold_difference = abs(threshold - REFERENCE_THRESHOLD)
+    print("\nTraining complete.")
+    print(f"Train matrix:      {X_train.shape}")
+    print(f"Validation matrix: {X_val.shape}")
+    print(f"Selected threshold: {threshold:.12f}")
+    print(f"Reference threshold: {REFERENCE_THRESHOLD:.12f}")
+    print(f"Absolute difference: {threshold_difference:.12g}")
+    print(f"Validation macro recall: {validation_metrics['macro_recall']:.4f}")
+    print(f"Validation FPR: {validation_metrics['false_positive_rate']:.4f}")
+    print(f"\nModel artifact: {model_path}")
+    print(f"Training report: {report_path}")
 
-    return metrics
+    return training_report
 
 
 def main() -> None:
     args = parse_args()
-    metrics = run_experiment(args)
 
-    print("\n=== Isolation Forest Baseline ===")
-    print(f"Features: {metrics['feature_count']}")
-    print(f"Threshold: {metrics['threshold_selection']['threshold']:.6f}")
+    output_files = [
+        args.output_dir / "selected_model.joblib",
+        args.output_dir / "training_metrics.json",
+    ]
+    existing = [path for path in output_files if path.exists()]
+    if existing and not args.overwrite:
+        existing_text = "\n".join(str(path) for path in existing)
+        raise FileExistsError(
+            "Training output already exists; refusing to overwrite:\n"
+            f"{existing_text}\nPass --overwrite to replace it."
+        )
 
-    for split in ("validation_metrics", "test_metrics"):
-        report = metrics[split]
-        print(f"\n{split.replace('_', ' ').title()}")
-        for name in (
-            "roc_auc",
-            "average_precision",
-            "precision",
-            "recall",
-            "f1",
-        ):
-            value = report[name]
-            display = "N/A" if value is None else f"{value:.4f}"
-            print(f"  {name:20s} {display}")
-
-        print("  Confusion matrix:", report["confusion_matrix"])
-
-    print(f"\nArtifacts: {args.output_dir.resolve()}")
+    run_training(args)
 
 
 if __name__ == "__main__":

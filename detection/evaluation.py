@@ -57,9 +57,7 @@ def select_f1_threshold(
     scores = _validate_scores(validation_scores, len(y))
 
     if np.unique(y).size != 2:
-        raise ValueError(
-            "Threshold selection requires both classes in validation data"
-        )
+        raise ValueError("Threshold selection requires both classes in validation data")
 
     precision, recall, thresholds = precision_recall_curve(y, scores)
 
@@ -116,23 +114,14 @@ def evaluate_scores(
         "fraud_prevalence": float(y.mean()),
         "predicted_positive_rate": float(predictions.mean()),
         "threshold": float(threshold),
-        "roc_auc": (
-            float(roc_auc_score(y, risk_scores))
-            if has_both_classes
-            else None
-        ),
+        "roc_auc": (float(roc_auc_score(y, risk_scores)) if has_both_classes else None),
         "average_precision": (
-            float(average_precision_score(y, risk_scores))
-            if has_both_classes
-            else None
+            float(average_precision_score(y, risk_scores)) if has_both_classes else None
         ),
-        "precision": float(
-            precision_score(y, predictions, zero_division=0)
-        ),
-        "recall": float(
-            recall_score(y, predictions, zero_division=0)
-        ),
+        "precision": float(precision_score(y, predictions, zero_division=0)),
+        "recall": float(recall_score(y, predictions, zero_division=0)),
         "f1": float(f1_score(y, predictions, zero_division=0)),
+        "false_positive_rate": float(fp / (fp + tn) if (fp + tn) else 0.0),
         "confusion_matrix": {
             "tn": int(tn),
             "fp": int(fp),
@@ -180,3 +169,138 @@ def evaluate_by_fraud_type(
         }
 
     return results
+
+
+def select_coverage_threshold(
+    y_validation: Any,
+    validation_scores: Any,
+    fraud_types: Any,
+    *,
+    maximum_false_positive_rate: float = 0.15,
+    minimum_fraud_type_recall: float = 0.50,
+) -> tuple[float, dict[str, Any]]:
+    """
+    Select the threshold that maximizes macro fraud-type recall,
+    subject to a maximum FPR and minimum recall for every fraud type.
+
+    Higher scores must represent higher anomaly risk.
+    """
+
+    y = _validate_binary_labels(
+        y_validation,
+        "y_validation",
+    )
+
+    scores = _validate_scores(
+        validation_scores,
+        len(y),
+    )
+
+    types = np.asarray(fraud_types, dtype=str)
+
+    if types.ndim != 1 or len(types) != len(y):
+        raise ValueError("fraud_types must be one-dimensional and aligned with labels.")
+
+    if np.unique(y).size != 2:
+        raise ValueError(
+            "Threshold selection requires both classes in validation data."
+        )
+
+    if (
+        not np.isfinite(maximum_false_positive_rate)
+        or not 0.0 <= maximum_false_positive_rate <= 1.0
+    ):
+        raise ValueError("maximum_false_positive_rate must be between 0 and 1.")
+
+    if (
+        not np.isfinite(minimum_fraud_type_recall)
+        or not 0.0 <= minimum_fraud_type_recall <= 1.0
+    ):
+        raise ValueError("minimum_fraud_type_recall must be between 0 and 1.")
+
+    # Every fraudulent validation transaction must have a valid type.
+    normalized_types = np.char.lower(np.char.strip(types))
+    invalid_types = np.isin(
+        normalized_types[y == 1],
+        ["", "none", "nan"],
+    )
+
+    if invalid_types.any():
+        raise ValueError(
+            "Every fraudulent validation transaction must have a "
+            "non-empty fraud type."
+        )
+
+    fraud_type_names = sorted(set(types[y == 1]))
+
+    if not fraud_type_names:
+        raise ValueError("No fraud types found in validation data.")
+
+    best_threshold = None
+    best_key = None
+    best_diagnostics = None
+
+    # Each unique score represents a distinct prediction boundary.
+    for threshold in np.unique(scores):
+
+        predictions = (scores >= threshold).astype(np.int8)
+
+        tn, fp, fn, tp = confusion_matrix(
+            y,
+            predictions,
+            labels=[0, 1],
+        ).ravel()
+
+        false_positive_rate = float(fp / (fp + tn)) if (fp + tn) > 0 else 0.0
+
+        type_metrics = evaluate_by_fraud_type(
+            y,
+            types,
+            predictions,
+        )
+
+        type_recalls = {
+            name: float(type_metrics[name]["recall"]) for name in fraud_type_names
+        }
+
+        minimum_recall = min(type_recalls.values())
+        macro_recall = float(np.mean(list(type_recalls.values())))
+
+        # Reject thresholds that violate either coverage constraint.
+        if false_positive_rate > maximum_false_positive_rate + 1e-12:
+            continue
+
+        if minimum_recall < minimum_fraud_type_recall - 1e-12:
+            continue
+
+        # Selection priority:
+        # 1. Highest macro recall.
+        # 2. Lowest FPR when macro recall ties.
+        # 3. Highest threshold when both metrics tie.
+        selection_key = (
+            macro_recall,
+            -false_positive_rate,
+            float(threshold),
+        )
+
+        if best_key is None or selection_key > best_key:
+            best_key = selection_key
+            best_threshold = float(threshold)
+
+            best_diagnostics = {
+                "method": "maximum_macro_recall_subject_to_constraints",
+                "maximum_false_positive_rate": float(maximum_false_positive_rate),
+                "minimum_fraud_type_recall": float(minimum_fraud_type_recall),
+                "validation_macro_recall": macro_recall,
+                "validation_minimum_fraud_type_recall": float(minimum_recall),
+                "validation_false_positive_rate": float(false_positive_rate),
+                "validation_fraud_type_recall": type_recalls,
+            }
+
+    if best_threshold is None:
+        raise RuntimeError(
+            "No validation threshold satisfies the requested "
+            "false-positive-rate and fraud-type-recall constraints."
+        )
+
+    return best_threshold, best_diagnostics

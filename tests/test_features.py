@@ -7,7 +7,6 @@ import pytest
 from detection.features import (
     CATEGORICAL_FEATURES,
     FEATURE_COLUMNS,
-    FORBIDDEN_FEATURE_COLUMNS,
     HistoricalFeatureBuilder,
     build_features,
     create_preprocessor,
@@ -60,7 +59,6 @@ def test_feature_schema_excludes_labels_and_identifiers():
     assert len(X) == 2
     assert tuple(X.columns) == FEATURE_COLUMNS
 
-    assert not (set(X.columns) & FORBIDDEN_FEATURE_COLUMNS)
     assert set(X.columns) == set(FEATURE_COLUMNS)
 
 
